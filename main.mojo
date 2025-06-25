@@ -14,7 +14,6 @@ alias LENET_FILE =          "model.dat"
 alias COUNT_TRAIN =     60000
 alias COUNT_TEST =      10000
 
-alias IMAGE_SIZE =      28 # as we read it in from the file, its padded to LENGTH_FEATURE0 (a.k.a. PADDED_SIZE)
 alias LENGTH_KERNEL =   5
 
 alias LENGTH_FEATURE0 = 32
@@ -35,40 +34,44 @@ alias OUTPUT =  10
 alias ALPHA = 0.5
 alias PADDING = 2
 
-alias ftype = DType.float32 # model's float type
-
+alias IMAGE_SIZE =      28 # as we read it in from the file, its padded to LENGTH_FEATURE0 (a.k.a. PADDED_SIZE)
 alias PADDED_SIZE = IMAGE_SIZE + 2 * PADDING # 32 x 32 is what we want eventually # this should equal LENGTH_FEATURE0
-alias ImageLayout = Layout.row_major(PADDED_SIZE, PADDED_SIZE)
-alias ImageStorage = InlineArray[Scalar[ftype], PADDED_SIZE * PADDED_SIZE]#(uninitialized = True)
-alias ImageTensor = LayoutTensor[mut = False, ftype, ImageLayout]
+alias ftype = DType.float32 # model's float type. pixels are uint8 (bytes), non-negotiable
 
-alias PaddedLayout = Layout.row_major(PADDED_SIZE, PADDED_SIZE)
-alias PaddedStorage = InlineArray[Scalar[ftype], PADDED_SIZE * PADDED_SIZE]#
-alias PaddedTensor = LayoutTensor
+alias PixelLayout = Layout.row_major(IMAGE_SIZE, IMAGE_SIZE)
+alias PixelStorage = InlineArray[Scalar[DType.uint8], IMAGE_SIZE * IMAGE_SIZE]#(uninitialized = True)
+#alias PixelTensor = LayoutTensor[mut = True, DType.uint8, PixelLayout, origin = Origin[mut]]
+
+alias DataLayout = Layout.row_major(PADDED_SIZE, PADDED_SIZE)
+alias DataStorage = InlineArray[Scalar[ftype], PADDED_SIZE * PADDED_SIZE]#
+#alias DataTensor = LayoutTensor[mut = True, ftype, DataLayout, origin = Origin[mut]]
 
 struct Image(Stringable, Copyable):
-    var pixels: InlineArray[Scalar[DType.uint8], IMAGE_SIZE * IMAGE_SIZE]#ImageStorage#ImageTensor
+    # we'll store just the 28x28 for now, and write a function to return a padded + normalized version
+    #var pixels: InlineArray[Scalar[DType.uint8], IMAGE_SIZE * IMAGE_SIZE]#ImageStorage#ImageTensor
+    var pixels: PixelStorage
     var label: UInt8 # [0, 9]
 
     fn __init__(out self, ptr: UnsafePointer[UInt8], label: UInt8):
         # just stores raw pixel values, normalizing is separate. wasteful and inefficient, i suppose
-        var temp_pixels = InlineArray[Scalar[DType.uint8], IMAGE_SIZE * IMAGE_SIZE](fill = 0)
+        #var temp_pixels = InlineArray[Scalar[DType.uint8], IMAGE_SIZE * IMAGE_SIZE](fill = 0)
+        var temp_pixels = PixelStorage(fill = 0)
         # memcpy probably possible
         for r in range(IMAGE_SIZE):
             for c in range(IMAGE_SIZE):
                 var idx = r * IMAGE_SIZE + c
                 temp_pixels[idx] = ptr[idx]
 
-        var tensor = LayoutTensor[mut = True, DType.uint8, Layout.row_major(IMAGE_SIZE, IMAGE_SIZE)](temp_pixels)
+        #var tensor = PixelTensor(temp_pixels)
         self.pixels = temp_pixels
         self.label = label
 
-    fn toNormalized(self) -> ImageStorage:
+    fn toNormalized(self) -> DataStorage:
         # normalizes from 28x28 uint8 to zero-padded 32x32 float32 (or whatever type)
-        var storage = ImageStorage(fill = 0.0)
+        var storage = DataStorage(fill = 0.0)
         #var tensor = ImageTensor(storage)
         #mut = False gives a terrible terrible compiler warning, please fix
-        var tensor = LayoutTensor[mut = True, ftype, ImageLayout](storage)
+        #var tensor = DataTensor(storage)
 
         var mean: Float32
         var std: Scalar[ftype]
@@ -87,14 +90,13 @@ struct Image(Stringable, Copyable):
         std = sqrt(temp)
         #print("sum, std_sum, mean, std", sum, std_sum, mean, std)
 
-        #tensor = ImageTensor(storage)
         for r in range(IMAGE_SIZE):
             for c in range(IMAGE_SIZE):
                 var idx = r * IMAGE_SIZE + c
                 var new_idx = (r + PADDING) * (IMAGE_SIZE + PADDING * 2) + (c + PADDING)
                 # new_idx only adds padding once so it's centered
 
-                tensor[r + PADDING, c + PADDING] = (Float32(self.pixels[idx]) - mean) / std
+                #tensor[r + PADDING, c + PADDING] = (Float32(self.pixels[idx]) - mean) / std
                 storage[new_idx] = (Float32(self.pixels[idx]) - mean) / std
          
         return storage
