@@ -70,53 +70,52 @@ struct LeNet5():
             for j in range(self.weight0_1.shape[1]()):
                 for k in range(self.weight0_1.shape[2]()):
                     for l in range(self.weight0_1.shape[3]()):
-                        print("[",i,j,k,l,"]",self.weight0_1[i,j,k,l])
-        """
-        for i in range(len(self.weight0_1)):
-            self.weight0_1[i] = random_float64(-1.0, 1.0).cast[ftype]()
-        for i in range(len(self.weight2_3)):
-            self.weight2_3[i] = random_float64(-1.0, 1.0).cast[ftype]()
-        for i in range(len(self.weight4_5)):
-            self.weight4_5[i] = random_float64(-1.0, 1.0).cast[ftype]()
-        for i in range(len(self.weight5_6)):
-            self.weight5_6[i] = random_float64(-1.0, 1.0).cast[ftype]()
+                        self.weight0_1[i,j,k,l] = random_float64(-1.0, 1.0).cast[ftype]()
 
-        for i in range(len(self.bias0_1)):
+        for i in range(self.weight2_3.shape[0]()):
+            for j in range(self.weight2_3.shape[1]()):
+                for k in range(self.weight2_3.shape[2]()):
+                    for l in range(self.weight2_3.shape[3]()):
+                        self.weight2_3[i,j,k,l] = random_float64(-1.0, 1.0).cast[ftype]()
+        
+        for i in range(self.weight4_5.shape[0]()):
+            for j in range(self.weight4_5.shape[1]()):
+                for k in range(self.weight4_5.shape[2]()):
+                    for l in range(self.weight4_5.shape[3]()):
+                        self.weight4_5[i,j,k,l] = random_float64(-1.0, 1.0).cast[ftype]()
+
+        for i in range(self.weight5_6.shape[0]()):
+            for j in range(self.weight5_6.shape[1]()):
+                self.weight5_6[i,j] = random_float64(-1.0, 1.0).cast[ftype]()
+
+        for i in range(self.bias0_1.shape[0]()):
             self.bias0_1[i] = random_float64(-1.0, 1.0).cast[ftype]()
-        for i in range(len(self.bias2_3)):
+        for i in range(self.bias2_3.shape[0]()):
             self.bias2_3[i] = random_float64(-1.0, 1.0).cast[ftype]()
-        for i in range(len(self.bias4_5)):
+        for i in range(self.bias4_5.shape[0]()):
             self.bias4_5[i] = random_float64(-1.0, 1.0).cast[ftype]()
-        for i in range(len(self.bias5_6)):
+        for i in range(self.bias5_6.shape[0]()):
             self.bias5_6[i] = random_float64(-1.0, 1.0).cast[ftype]()
-        """
-    
 
 struct Feature():
     # LayoutTensor[ftype, Layout.row_major(INPUT, LAYER1, LENGTH_KERNEL, LENGTH_KERNEL)]()
-    var input: InlineArray[Scalar[ftype], INPUT * LENGTH_FEATURE0 * LENGTH_FEATURE0]
-    var layer1: InlineArray[Scalar[ftype], LAYER1 * LENGTH_FEATURE1 * LENGTH_FEATURE1]
-    var layer2: InlineArray[Scalar[ftype], LAYER2 * LENGTH_FEATURE2 * LENGTH_FEATURE2]
-    var layer3: InlineArray[Scalar[ftype], LAYER3 * LENGTH_FEATURE3 * LENGTH_FEATURE3]
-    var layer4: InlineArray[Scalar[ftype], LAYER4 * LENGTH_FEATURE4 * LENGTH_FEATURE4]
-    var layer5: InlineArray[Scalar[ftype], LAYER5 * LENGTH_FEATURE5 * LENGTH_FEATURE5]
-    var output: InlineArray[Scalar[ftype], OUTPUT]
+    var input: LayoutTensor[mut = True, ftype, Layout.row_major(INPUT, LENGTH_FEATURE0, LENGTH_FEATURE0), MutableAnyOrigin]
+    var layer1: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER1, LENGTH_FEATURE1, LENGTH_FEATURE1), MutableAnyOrigin]
+    var layer2: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER2, LENGTH_FEATURE2, LENGTH_FEATURE2), MutableAnyOrigin]
+    var layer3: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER3, LENGTH_FEATURE3, LENGTH_FEATURE3), MutableAnyOrigin]
+    var layer4: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4), MutableAnyOrigin]
+    var layer5: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER5, LENGTH_FEATURE5, LENGTH_FEATURE5), MutableAnyOrigin]
+    var output: LayoutTensor[mut = True, ftype, Layout.row_major(OUTPUT), MutableAnyOrigin]
 
     fn __init__(out self):
-        self.input  = InlineArray[Scalar[ftype], INPUT * LENGTH_FEATURE0 * LENGTH_FEATURE0](uninitialized = True)
-        self.layer1 = InlineArray[Scalar[ftype], LAYER1 * LENGTH_FEATURE1 * LENGTH_FEATURE1](uninitialized = True)
-        self.layer2 = InlineArray[Scalar[ftype], LAYER2 * LENGTH_FEATURE2 * LENGTH_FEATURE2](uninitialized = True)
-        self.layer3 = InlineArray[Scalar[ftype], LAYER3 * LENGTH_FEATURE3 * LENGTH_FEATURE3](uninitialized = True)
-        self.layer4 = InlineArray[Scalar[ftype], LAYER4 * LENGTH_FEATURE4 * LENGTH_FEATURE4](uninitialized = True)
-        self.layer5 = InlineArray[Scalar[ftype], LAYER5 * LENGTH_FEATURE5 * LENGTH_FEATURE5](uninitialized = True)
-        self.output = InlineArray[Scalar[ftype], OUTPUT](uninitialized = True)
+        self.input = __type_of(self.input).stack_allocation()
+        self.layer1 = __type_of(self.layer1).stack_allocation()
+        self.layer2 = __type_of(self.layer2).stack_allocation()
+        self.layer3 = __type_of(self.layer3).stack_allocation()
+        self.layer4 = __type_of(self.layer4).stack_allocation()
+        self.layer5 = __type_of(self.layer5).stack_allocation()
+        self.output = __type_of(self.output).stack_allocation()
         
-struct Model():
-    var w0_1: LayoutTensor[mut = True, ftype, Layout.row_major(INPUT, LENGTH_FEATURE0, LENGTH_FEATURE0), MutableAnyOrigin]
-
-    fn __init__(out self):
-        self.w0_1 = __type_of(self.w0_1).stack_allocation()
-
 alias PixelLayout = Layout.row_major(IMAGE_SIZE, IMAGE_SIZE)
 alias PixelStorage = InlineArray[Scalar[DType.uint8], IMAGE_SIZE * IMAGE_SIZE]#(uninitialized = True)
 alias PixelTensor = LayoutTensor[mut = True, DType.uint8, PixelLayout] # origin???
@@ -270,25 +269,75 @@ def main():
     for i in range(temp_count):
         var train_image = train_data[i]
         print("train sample:\n", String(train_image))
-        print(train_image.toNormalized()[28 * 14])
+        #print(train_image.toNormalized()[28 * 14])
 
         var test_image = test_data[i]
         print("test sample:\n", String(test_image))
-        print(test_image.toNormalized()[28 * 14])
+        #print(test_image.toNormalized()[28 * 14])
 
     train_data.free()
     test_data.free()
+
+    #####################################
 
     var model = LeNet5()
     model.randomizeWeights()
     print("rank weight0_1 is: ", model.weight0_1.rank)
 
-
     var feat = Feature()
 
-    var storage = InlineArray[Scalar[ftype], 24](fill = 0.0)
+    #####################################
+
+    var storage = InlineArray[Scalar[ftype], 24](fill = 1.0)
     var tensor = LayoutTensor[ftype, Layout.row_major(2,3,4)](storage)
     print("Tensor created of 24 elems with row major shape (2,3,4):\n\tshape[0]() = ", tensor.shape[0](),\
             "\n\tshape[1]() = ", tensor.shape[1](),\
             "\n\tshape[2]() = ", tensor.shape[2]())
     
+    print("test kernel")
+    var kernels = LayoutTensor[mut = True, ftype, Layout.row_major(1,2,2,2), MutableAnyOrigin].stack_allocation()
+    for i in range(1):
+        for j in range(2):
+            for k in range(2):
+                for l in range(2):
+                    kernels[i, j, k, l] = i + j + k + l
+                    print(kernels[i,j,k,l], end = ", ")
+                print("\n")
+            print("\n\n")
+        print("\n")
+
+    print("test bias")
+    var bias = LayoutTensor[mut = True, ftype, Layout.row_major(2), MutableAnyOrigin].stack_allocation()
+    for i in range(bias.shape[0]()):
+        bias[i] = 0.69
+        print(bias[i], end = ", ")
+    print("\n")
+
+    print("test image")
+    var image = LayoutTensor[mut = True, ftype, Layout.row_major(1, 5, 5), MutableAnyOrigin].stack_allocation()
+    for i in range(1):
+        for j in range(6):
+            for k in range(6):
+                image[i, j, k] = j - k
+                print(image[i, j, k], end = ", ")
+            print("\n")
+        print("\n\n")
+
+    var result = LayoutTensor[mut = True, ftype, Layout.row_major(2,4,4), MutableAnyOrigin].stack_allocation().fill(0.0)
+    #CONVOLUTION_FORWARD(features->input, features->layer1, lenet->weight0_1, lenet->bias0_1, action);
+    #                         1,5,5           2,4,4              1,2,2,2          2            (RELU)
+    for x in range(kernels.shape[0]()): # number of input channels
+        for y in range(kernels.shape[1]()): # number of output channels
+            for i in range(result.shape[1]()): # each output pixel row
+                for j in range(result.shape[2]()): # each output pixel column
+                    for a in range(kernels.shape[2]()): # for each weight row of a kernel
+                        for b in range(kernels.shape[2]()): # for each weight col of a kernel
+                            result[y, i, j] +=  image[x, i + a, j + b] * kernels[x, y, a, b]
+
+    print("result:::")
+    for i in range(2):
+        for j in range(4):
+            for k in range(4):
+                print(result[i,j,k], end = ", ")
+            print()
+        print("\n")
