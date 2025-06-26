@@ -1,7 +1,6 @@
 #import lenet
 
-from layout import Layout, LayoutTensor, print_layout#, LayoutTensorIter
-from layout.layout_tensor import LayoutTensorIter
+from layout import Layout, LayoutTensor, print_layout
 from math import sqrt
 from random import random_float64
 import os
@@ -43,54 +42,47 @@ alias ftype = DType.float32 # model's float type. pixels are uint8 (bytes), non-
 
 struct LeNet5():
     # LayoutTensor[ftype, Layout.row_major(INPUT, LAYER1, LENGTH_KERNEL, LENGTH_KERNEL)]()
-    var weight0_1: LayoutTensor[mut = True, ftype, Layout.row_major(INPUT, LAYER1, LENGTH_KERNEL, LENGTH_KERNEL), MutableAnyOrigin]
-    var weight2_3: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER2, LAYER3, LENGTH_KERNEL, LENGTH_KERNEL), MutableAnyOrigin]
-    var weight4_5: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER4, LAYER5, LENGTH_KERNEL, LENGTH_KERNEL), MutableAnyOrigin]
-    var weight5_6: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER5 * LENGTH_FEATURE5 * LENGTH_FEATURE5, OUTPUT), MutableAnyOrigin]
+    var weight0_1: InlineArray[Scalar[ftype], INPUT * LAYER1 * LENGTH_KERNEL_SQ]
+    var weight2_3: InlineArray[Scalar[ftype], LAYER2 * LAYER3 * LENGTH_KERNEL_SQ]
+    var weight4_5: InlineArray[Scalar[ftype], LAYER4 * LAYER5 * LENGTH_KERNEL_SQ]
+    var weight5_6: InlineArray[Scalar[ftype], LAYER5 * LENGTH_FEATURE5 * LENGTH_FEATURE5 * OUTPUT]
 
-    var bias0_1: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER1), MutableAnyOrigin]
-    var bias2_3: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER3), MutableAnyOrigin]
-    var bias4_5: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER5), MutableAnyOrigin]
-    var bias5_6: LayoutTensor[mut = True, ftype, Layout.row_major(OUTPUT), MutableAnyOrigin]
+    var bias0_1: InlineArray[Scalar[ftype], LAYER1]
+    var bias2_3: InlineArray[Scalar[ftype], LAYER3]
+    var bias4_5: InlineArray[Scalar[ftype], LAYER5]
+    var bias5_6: InlineArray[Scalar[ftype], OUTPUT]
 
     fn __init__(out self):
-        self.weight0_1 = __type_of(self.weight0_1).stack_allocation()
-        self.weight2_3 = __type_of(self.weight2_3).stack_allocation()
-        self.weight4_5 = __type_of(self.weight4_5).stack_allocation()
-        self.weight5_6 = __type_of(self.weight5_6).stack_allocation()
+        self.weight0_1 = InlineArray[Scalar[ftype], INPUT * LAYER1 * LENGTH_KERNEL_SQ](uninitialized = True)  
+        self.weight2_3 = InlineArray[Scalar[ftype], LAYER2 * LAYER3 * LENGTH_KERNEL_SQ](uninitialized = True)  
+        self.weight4_5 = InlineArray[Scalar[ftype], LAYER4 * LAYER5 * LENGTH_KERNEL_SQ](uninitialized = True)  
+        self.weight5_6 = InlineArray[Scalar[ftype], LAYER5 * LENGTH_FEATURE5 * LENGTH_FEATURE5 * OUTPUT](uninitialized = True)  
+        #self.weight0_1 = LayoutTensor[mut = True, ftype, Layout.row_major(INPUT, LAYER1, LENGTH_KERNEL, LENGTH_KERNEL)](w0_1)
 
-        self.bias0_1 = __type_of(self.bias0_1).stack_allocation()
-        self.bias2_3 = __type_of(self.bias2_3).stack_allocation()
-        self.bias4_5 = __type_of(self.bias4_5).stack_allocation()
-        self.bias5_6 = __type_of(self.bias5_6).stack_allocation()
+        self.bias0_1 = InlineArray[Scalar[ftype], LAYER1](uninitialized = True)
+        self.bias2_3 = InlineArray[Scalar[ftype], LAYER3](uninitialized = True)
+        self.bias4_5 = InlineArray[Scalar[ftype], LAYER5](uninitialized = True)
+        self.bias5_6 = InlineArray[Scalar[ftype], OUTPUT](uninitialized = True)
     
     fn randomizeWeights(self):
-        #var iter = LayoutTensorIter[ftype, Layout.row_major(1024)](self.weight0_1)
-        for i in range(self.weight0_1.shape[0]()):
-            for j in range(self.weight0_1.shape[1]()):
-                for k in range(self.weight0_1.shape[2]()):
-                    for l in range(self.weight0_1.shape[3]()):
-                        print("[",i,j,k,l,"]",self.weight0_1[i,j,k,l])
-        """
+        var model = LeNet5()
         for i in range(len(self.weight0_1)):
-            self.weight0_1[i] = random_float64(-1.0, 1.0).cast[ftype]()
+            model.weight0_1[i] = random_float64(-1.0, 1.0).cast[ftype]()
         for i in range(len(self.weight2_3)):
-            self.weight2_3[i] = random_float64(-1.0, 1.0).cast[ftype]()
+            model.weight2_3[i] = random_float64(-1.0, 1.0).cast[ftype]()
         for i in range(len(self.weight4_5)):
-            self.weight4_5[i] = random_float64(-1.0, 1.0).cast[ftype]()
+            model.weight4_5[i] = random_float64(-1.0, 1.0).cast[ftype]()
         for i in range(len(self.weight5_6)):
-            self.weight5_6[i] = random_float64(-1.0, 1.0).cast[ftype]()
+            model.weight5_6[i] = random_float64(-1.0, 1.0).cast[ftype]()
 
         for i in range(len(self.bias0_1)):
-            self.bias0_1[i] = random_float64(-1.0, 1.0).cast[ftype]()
+            model.bias0_1[i] = random_float64(-1.0, 1.0).cast[ftype]()
         for i in range(len(self.bias2_3)):
-            self.bias2_3[i] = random_float64(-1.0, 1.0).cast[ftype]()
+            model.bias2_3[i] = random_float64(-1.0, 1.0).cast[ftype]()
         for i in range(len(self.bias4_5)):
-            self.bias4_5[i] = random_float64(-1.0, 1.0).cast[ftype]()
+            model.bias4_5[i] = random_float64(-1.0, 1.0).cast[ftype]()
         for i in range(len(self.bias5_6)):
-            self.bias5_6[i] = random_float64(-1.0, 1.0).cast[ftype]()
-        """
-    
+            model.bias5_6[i] = random_float64(-1.0, 1.0).cast[ftype]()
 
 struct Feature():
     # LayoutTensor[ftype, Layout.row_major(INPUT, LAYER1, LENGTH_KERNEL, LENGTH_KERNEL)]()
@@ -123,7 +115,7 @@ alias PixelTensor = LayoutTensor[mut = True, DType.uint8, PixelLayout] # origin?
 
 alias DataLayout = Layout.row_major(PADDED_SIZE, PADDED_SIZE)
 alias DataStorage = InlineArray[Scalar[ftype], PADDED_SIZE * PADDED_SIZE]#
-alias DataTensor = LayoutTensor[mut = True, ftype, DataLayout, MutableAnyOrigin] # origin???
+alias DataTensor = LayoutTensor[mut = True, ftype, DataLayout] # origin???
 
 struct Image(Stringable, Copyable):
     # we'll store just the 28x28 for now, and write a function to return a padded + normalized version
@@ -134,7 +126,7 @@ struct Image(Stringable, Copyable):
     fn __init__(out self, ptr: UnsafePointer[UInt8], label: UInt8):
         # just stores raw pixel values, normalizing is separate. wasteful and inefficient, i suppose
         #var temp_pixels = InlineArray[Scalar[DType.uint8], IMAGE_SIZE * IMAGE_SIZE](fill = 0)
-        var temp_pixels = PixelStorage(uninitialized = True)
+        var temp_pixels = PixelStorage(fill = 0)
         # memcpy probably possible
         for r in range(IMAGE_SIZE):
             for c in range(IMAGE_SIZE):
@@ -281,9 +273,6 @@ def main():
 
     var model = LeNet5()
     model.randomizeWeights()
-    print("rank weight0_1 is: ", model.weight0_1.rank)
-
-
     var feat = Feature()
 
     var storage = InlineArray[Scalar[ftype], 24](fill = 0.0)
@@ -292,3 +281,11 @@ def main():
             "\n\tshape[1]() = ", tensor.shape[1](),\
             "\n\tshape[2]() = ", tensor.shape[2]())
     
+
+    var testing = LayoutTensor[mut = True, ftype, Layout.row_major(3,6,9), MutableAnyOrigin].stack_allocation()
+    print("HERE:\n", testing.shape[1]())
+
+    var model_TEST = Model()
+    print("m0:", model_TEST.w0_1.shape[0]())
+    print("m1:", model_TEST.w0_1.shape[1]())
+    print("m2:", model_TEST.w0_1.shape[2]())
