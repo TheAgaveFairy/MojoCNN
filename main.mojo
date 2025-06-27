@@ -97,6 +97,19 @@ struct LeNet5():
         for i in range(self.bias5_6.shape[0]()):
             self.bias5_6[i] = random_float64(-1.0, 1.0).cast[ftype]()
 
+    @staticmethod
+    fn fromFile(filename: String) -> Self:
+        try:
+            var model_file = open(filename, "r")
+        
+            alias buffer_size = IMAGE_SIZE * IMAGE_SIZE
+            var image_buffer = UnsafePointer[UInt8].alloc(buffer_size)
+            
+        except e:
+            print("error at reading lenet5 from file", e)
+        return Self()
+        
+
 struct Feature():
     # LayoutTensor[ftype, Layout.row_major(INPUT, LAYER1, LENGTH_KERNEL, LENGTH_KERNEL)]()
     var input: LayoutTensor[mut = True, ftype, Layout.row_major(INPUT, LENGTH_FEATURE0, LENGTH_FEATURE0), MutableAnyOrigin]
@@ -108,13 +121,13 @@ struct Feature():
     var output: LayoutTensor[mut = True, ftype, Layout.row_major(OUTPUT), MutableAnyOrigin]
 
     fn __init__(out self):
-        self.input = __type_of(self.input).stack_allocation()
-        self.layer1 = __type_of(self.layer1).stack_allocation()
-        self.layer2 = __type_of(self.layer2).stack_allocation()
-        self.layer3 = __type_of(self.layer3).stack_allocation()
-        self.layer4 = __type_of(self.layer4).stack_allocation()
-        self.layer5 = __type_of(self.layer5).stack_allocation()
-        self.output = __type_of(self.output).stack_allocation()
+        self.input = __type_of(self.input).stack_allocation().fill(0.0)
+        self.layer1 = __type_of(self.layer1).stack_allocation().fill(0.0)
+        self.layer2 = __type_of(self.layer2).stack_allocation().fill(0.0)
+        self.layer3 = __type_of(self.layer3).stack_allocation().fill(0.0)
+        self.layer4 = __type_of(self.layer4).stack_allocation().fill(0.0)
+        self.layer5 = __type_of(self.layer5).stack_allocation().fill(0.0)
+        self.output = __type_of(self.output).stack_allocation().fill(0.0)
         
 alias PixelLayout = Layout.row_major(IMAGE_SIZE, IMAGE_SIZE)
 alias PixelStorage = InlineArray[Scalar[DType.uint8], IMAGE_SIZE * IMAGE_SIZE]#(uninitialized = True)
@@ -263,6 +276,7 @@ fn convoluteForward[in_chan: Int,
                      kernel_size: Int,
                      ](
                         kernels: LayoutTensor[mut = True, ftype, Layout.row_major(in_chan, out_chan, kernel_size, kernel_size)],
+                        bias: LayoutTensor[mut = True, ftype, Layout.row_major(out_chan)],
                         image: LayoutTensor[mut = True, ftype, Layout.row_major(in_chan, feat_size, feat_size)],
                         result: LayoutTensor[mut = True, ftype, Layout.row_major(out_chan, feat_size - kernel_size + 1, feat_size - kernel_size + 1)]
                      ) -> None:
@@ -273,6 +287,84 @@ fn convoluteForward[in_chan: Int,
                     for a in range(kernels.shape[2]()): # for each weight row of a kernel
                         for b in range(kernels.shape[2]()): # for each weight col of a kernel
                             result[y, i, j] +=  image[x, i + a, j + b] * kernels[x, y, a, b]
+
+    # activation function (named "action")
+    for c in range(result.shape[0]()):
+        for i in range(result.shape[1]()):
+            for j in range(result.shape[2]()):
+                result[c, i, j] = result[c, i, j] if result[c, i, j] > 0.0 else 0.0 + bias[c]
+
+# SUBSAMP_MAX_FORWARD(features->layer1, features->layer2);
+fn maxPoolForward[num_channels: Int,
+                        in_feat_size: Int,
+                        out_feat_size: Int
+                      ](
+                      input: LayoutTensor[mut = True, ftype, Layout.row_major(num_channels, in_feat_size, in_feat_size), MutableAnyOrigin],
+                      output: LayoutTensor[mut = True, ftype, Layout.row_major(num_channels, out_feat_size, out_feat_size), MutableAnyOrigin]
+                      ):
+    var lenx = input.shape[1]() / output.shape[1]()
+    var leny = input.shape[2]() / output.shape[2]()
+    for c in range(output.shape[0]()): # each channel
+        for i in range(output.shape[1]()): # feature size
+            for j in range(output.shape[2]()): # feature size (should match shape[1]())
+                
+                var x0: Int = 0
+                var y0: Int = 0
+                var ismax: Int
+
+                for x in range(lenx):
+                    for y in range(leny):
+                        var temp_idx_x = Int(i * lenx + x)
+                        var temp_idx_y = Int(i * leny + y)
+                        var temp_idx_xx = Int(i * lenx + x0)
+                        var temp_idx_yy = Int(i * leny + y0)
+                        
+                        ismax = 1 if input[c, temp_idx_x, temp_idx_y] > input[c, temp_idx_xx, temp_idx_yy] else 0
+                        x0 += Int(ismax * (x - x0))
+                        y0 += Int(ismax * (y - y0))
+                
+                var temp_idx_xx = Int(i * lenx + x0)
+                var temp_idx_yy = Int(i * leny + y0)
+
+                output[c, i, j] = input[c, temp_idx_xx, temp_idx_yy] 
+
+# 	DOT_PRODUCT_FORWARD(features->layer5, features->output, lenet->weight5_6, lenet->bias5_6, action);
+fn matmulForward[num_chan: Int,
+                     feat_size: Int,
+                     output_size: Int,
+                     ](
+                        input: LayoutTensor[mut = True, ftype, Layout.row_major(num_chan, feat_size, feat_size)],
+                        output: LayoutTensor[mut = True, ftype, Layout.row_major(output_size)],
+                        weight: LayoutTensor[mut = True, ftype, Layout.row_major(num_chan * feat_size * feat_size, output_size)],
+                        bias: LayoutTensor[mut = True, ftype, Layout.row_major(output_size)]
+                     ) -> None:
+    # input is m x l, weight is l x n, output is m x n
+    # input is (layer5, feat5, feat5), weight is (layer5 * feat5 * feat5, output), output is (output)
+    # feat 5 is equal to the value 1
+    for x in range(weight.shape[0]()):
+        for y in range(weight.shape[1]()):
+            for f in range(feat_size):
+                output[y] += input[x, f, f] * weight[x, y]
+    for i in range(output.shape[0]()):
+        output[i] = output[i] if output[i] > 0 else 0
+        output[i] += bias[i]
+
+fn forward(lenet: LeNet5, features: Feature):
+    convoluteForward[INPUT, LAYER1, LENGTH_FEATURE0, LENGTH_KERNEL](
+            lenet.weight0_1, lenet.bias0_1, features.input, features.layer1)
+    
+    maxPoolForward[LAYER1, LENGTH_FEATURE1, LENGTH_FEATURE2](features.layer1, features.layer2)
+
+    convoluteForward[LAYER2, LAYER3, LENGTH_FEATURE2, LENGTH_KERNEL](
+            lenet.weight2_3, lenet.bias2_3, features.layer2, features.layer3)
+    
+    maxPoolForward[LAYER3, LENGTH_FEATURE3, LENGTH_FEATURE4](features.layer3, features.layer4)
+
+    convoluteForward[LAYER4, LAYER5, LENGTH_FEATURE4, LENGTH_KERNEL](
+            lenet.weight4_5, lenet.bias4_5, features.layer4, features.layer5)
+
+    matmulForward[LAYER5, LENGTH_FEATURE5, OUTPUT](features.layer5, features.output, lenet.weight5_6, lenet.bias5_6)
+
 def main():
     #print_layout(ImageLayout)
 
@@ -303,6 +395,7 @@ def main():
 
     var feat = Feature()
 
+    forward(model, feat)
     #####################################
 
     alias in_chan = 1
@@ -361,7 +454,7 @@ def main():
         print("\n")
 
     convoluteForward[in_chan, out_chan, image_size, kernel_size,
-                     ](kernels, image, result)
+                     ](kernels, bias, image, result)
     print("result:::")
     for i in range(result.shape[0]()):
         for j in range(result.shape[1]()):
