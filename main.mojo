@@ -211,8 +211,6 @@ struct Image(Stringable, Copyable):
         self.pixels = other.pixels
         self.label = other.label
 
-fn convoluteValid(input: InlineArray, output: InlineArray):
-    pass
 fn readData(count: Int, test_set: String, ptr: UnsafePointer[Image]):
     var data_filename: String = FILE_TEST_IMAGE
     var label_filename: String = FILE_TEST_LABEL
@@ -255,7 +253,26 @@ fn readData(count: Int, test_set: String, ptr: UnsafePointer[Image]):
         image_buffer.free()
     except e:
         print("Error with input binary files")
-    
+
+fn action(x: Scalar[ftype]) -> Scalar[ftype]:
+    return x if x > 0 else 0
+
+fn convoluteForward[in_chan: Int,
+                     out_chan: Int,
+                     feat_size: Int,
+                     kernel_size: Int,
+                     ](
+                        kernels: LayoutTensor[mut = True, ftype, Layout.row_major(in_chan, out_chan, kernel_size, kernel_size)],
+                        image: LayoutTensor[mut = True, ftype, Layout.row_major(in_chan, feat_size, feat_size)],
+                        result: LayoutTensor[mut = True, ftype, Layout.row_major(out_chan, feat_size - kernel_size + 1, feat_size - kernel_size + 1)]
+                     ) -> None:
+    for x in range(kernels.shape[0]()): # number of input channels
+        for y in range(kernels.shape[1]()): # number of output channels
+            for i in range(result.shape[1]()): # each output pixel row
+                for j in range(result.shape[2]()): # each output pixel column
+                    for a in range(kernels.shape[2]()): # for each weight row of a kernel
+                        for b in range(kernels.shape[2]()): # for each weight col of a kernel
+                            result[y, i, j] +=  image[x, i + a, j + b] * kernels[x, y, a, b]
 def main():
     #print_layout(ImageLayout)
 
@@ -282,48 +299,49 @@ def main():
 
     var model = LeNet5()
     model.randomizeWeights()
-    print("rank weight0_1 is: ", model.weight0_1.rank)
+    #print("rank weight0_1 is: ", model.weight0_1.rank)
 
     var feat = Feature()
 
     #####################################
 
-    var storage = InlineArray[Scalar[ftype], 24](fill = 1.0)
-    var tensor = LayoutTensor[ftype, Layout.row_major(2,3,4)](storage)
-    print("Tensor created of 24 elems with row major shape (2,3,4):\n\tshape[0]() = ", tensor.shape[0](),\
-            "\n\tshape[1]() = ", tensor.shape[1](),\
-            "\n\tshape[2]() = ", tensor.shape[2]())
-    
+    alias in_chan = 1
+    alias out_chan = 2
+    alias image_size = 5
+    alias kernel_size = 3
+    alias final_size = image_size - kernel_size + 1
+
     print("test kernel")
-    var kernels = LayoutTensor[mut = True, ftype, Layout.row_major(1,2,2,2), MutableAnyOrigin].stack_allocation()
-    for i in range(1):
-        for j in range(2):
-            for k in range(2):
-                for l in range(2):
+    var kernels = LayoutTensor[mut = True, ftype, Layout.row_major(in_chan, out_chan, kernel_size, kernel_size), MutableAnyOrigin].stack_allocation()
+    for i in range(kernels.shape[0]()):
+        for j in range(kernels.shape[1]()):
+            print("chan", i, "->", j)
+            for k in range(kernels.shape[2]()):
+                for l in range(kernels.shape[3]()):
                     kernels[i, j, k, l] = i + j + k + l
                     print(kernels[i,j,k,l], end = ", ")
-                print("\n")
-            print("\n\n")
+                print()
+            print()
         print("\n")
 
     print("test bias")
-    var bias = LayoutTensor[mut = True, ftype, Layout.row_major(2), MutableAnyOrigin].stack_allocation()
+    var bias = LayoutTensor[mut = True, ftype, Layout.row_major(out_chan), MutableAnyOrigin].stack_allocation()
     for i in range(bias.shape[0]()):
-        bias[i] = 0.69
+        bias[i] = 0.0005
         print(bias[i], end = ", ")
     print("\n")
 
     print("test image")
-    var image = LayoutTensor[mut = True, ftype, Layout.row_major(1, 5, 5), MutableAnyOrigin].stack_allocation()
-    for i in range(1):
-        for j in range(6):
-            for k in range(6):
+    var image = LayoutTensor[mut = True, ftype, Layout.row_major(in_chan, image_size, image_size), MutableAnyOrigin].stack_allocation()
+    for i in range(image.shape[0]()):
+        for j in range(image.shape[1]()):
+            for k in range(image.shape[2]()):
                 image[i, j, k] = j - k
                 print(image[i, j, k], end = ", ")
             print("\n")
         print("\n\n")
 
-    var result = LayoutTensor[mut = True, ftype, Layout.row_major(2,4,4), MutableAnyOrigin].stack_allocation().fill(0.0)
+    var result = LayoutTensor[mut = True, ftype, Layout.row_major(out_chan,final_size,final_size), MutableAnyOrigin].stack_allocation().fill(0.0)
     #CONVOLUTION_FORWARD(features->input, features->layer1, lenet->weight0_1, lenet->bias0_1, action);
     #                         1,5,5           2,4,4              1,2,2,2          2            (RELU)
     for x in range(kernels.shape[0]()): # number of input channels
@@ -335,9 +353,19 @@ def main():
                             result[y, i, j] +=  image[x, i + a, j + b] * kernels[x, y, a, b]
 
     print("result:::")
-    for i in range(2):
-        for j in range(4):
-            for k in range(4):
+    for i in range(result.shape[0]()):
+        for j in range(result.shape[1]()):
+            for k in range(result.shape[2]()):
+                print(result[i,j,k], end = ", ")
+            print()
+        print("\n")
+
+    convoluteForward[in_chan, out_chan, image_size, kernel_size,
+                     ](kernels, image, result)
+    print("result:::")
+    for i in range(result.shape[0]()):
+        for j in range(result.shape[1]()):
+            for k in range(result.shape[2]()):
                 print(result[i,j,k], end = ", ")
             print()
         print("\n")
