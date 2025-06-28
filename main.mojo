@@ -1,10 +1,13 @@
-#import lenet
+import lenet
 
 from layout import Layout, LayoutTensor, print_layout#, LayoutTensorIter
 from layout.layout_tensor import LayoutTensorIter
 from math import sqrt
 from random import random_float64
+from sys.info import sizeof
+#import simd
 import os
+
 
 #alias DEBUG = False
 
@@ -13,6 +16,7 @@ alias FILE_TRAIN_LABEL =    "train-labels-idx1-ubyte"
 alias FILE_TEST_IMAGE =     "t10k-images-idx3-ubyte"
 alias FILE_TEST_LABEL =     "t10k-labels-idx1-ubyte"
 alias LENET_FILE =          "model.dat"
+alias NUM_WEIGHTS =     51902 # can be calculated but we're just hardcoding for some easier checks at load/save
 alias COUNT_TRAIN =     60000
 alias COUNT_TEST =      10000
 
@@ -98,15 +102,97 @@ struct LeNet5():
             self.bias5_6[i] = random_float64(-1.0, 1.0).cast[ftype]()
 
     @staticmethod
-    fn fromFile(filename: String) -> Self:
+    fn bytesToFType[filetype: DType, num_bytes: Int, layout: Layout]
+        (bytes: InlineArray[Scalar[DType.uint8], num_bytes],
+         tensor: LayoutTensor[mut = True, ftype, layout, MutableAnyOrigin]) -> None:
+
+        alias f_sz = filetype.sizeof()
+        alias num_elems = num_bytes / f_sz
+        if num_elems != tensor.size() or num_elems != len(bytes) / f_sz:
+            print("FATAL ERROR CONVERTING BYTES TO TENSOR")
+            print(num_elems, tensor.size(), len(bytes))
+
+        if tensor.layout.rank() == 2: # why can't i use "tensor.rank()"?????
+            for idx in range(tensor.size()):
+                var i = idx // (tensor.shape[1]())
+                var j = idx % (tensor.shape[1]())
+                var buffer = InlineArray[Scalar[DType.uint8], f_sz](uninitialized = True)
+                for bi in range(f_sz):
+                    var temp_idx = idx * f_sz + bi
+                    buffer[f_sz - 1 - bi] = bytes[temp_idx]
+                    #print("into buffer:", buffer[bi])
+                var value = SIMD[filetype, 1].from_bytes[](buffer)
+                #print("val from raw bytes:", value)
+                tensor[i,j] = value.cast[ftype]()
+        
+        if tensor.layout.rank() == 3: # why can't i use "tensor.rank()"?????
+            for idx in range(tensor.size()):
+                var i = idx // (tensor.shape[1]() * tensor.shape[2]())
+                var remainder = idx % (tensor.shape[1]() * tensor.shape[2]())
+                var j = remainder // tensor.shape[2]()
+                var k = remainder % tensor.shape[2]()
+                var buffer = InlineArray[Scalar[DType.uint8], f_sz](uninitialized = True)
+                for bi in range(f_sz):
+                    var temp_idx = idx * f_sz + bi
+                    buffer[f_sz - 1 - bi] = bytes[temp_idx]
+                    #print("into buffer:", buffer[bi])
+                var value = SIMD[filetype, 1].from_bytes[](buffer)
+                #print("val from raw bytes:", value)
+                tensor[i,j,k] = value.cast[ftype]()
+                
+        if tensor.layout.rank() == 4: # why can't i use "tensor.rank()"?????
+            for idx in range(tensor.size()):
+                var i = idx // (tensor.shape[1]() * tensor.shape[2]() * tensor.shape[3]())
+                var remainder = idx % (tensor.shape[1]() * tensor.shape[2]() * tensor.shape[3]())
+                var j = remainder // (tensor.shape[2]() * tensor.shape[3]())
+                remainder = remainder % (tensor.shape[2]() * tensor.shape[3]())
+                var k = remainder // tensor.shape[3]()
+                var l = remainder % tensor.shape[3]()
+
+                var buffer = InlineArray[Scalar[DType.uint8], f_sz](uninitialized = True)
+                for bi in range(f_sz):
+                    var temp_idx = idx * f_sz + bi
+                    buffer[f_sz - 1 - bi] = bytes[temp_idx]
+                var value = SIMD[filetype, 1].from_bytes[](buffer)
+                tensor[i,j,k,l] = value.cast[ftype]()
+
+    @staticmethod
+    fn fromFile[filetype: DType](filename: String) -> Self:
+        alias bytes_per_file_weight = filetype.sizeof()#sizeof[filetype]() must use filetype.sizeof() why?
+        var count: Int = 0 # should be 51902 weights in the file
+        print("Loading LeNet5 from ", filename, ". filetype number of bytes:", bytes_per_file_weight)
+        var model = LeNet5()
+
         try:
             var model_file = open(filename, "r")
         
-            alias buffer_size = IMAGE_SIZE * IMAGE_SIZE
-            var image_buffer = UnsafePointer[UInt8].alloc(buffer_size)
+            #var bytes = model_file.read_bytes(bytes_to_read)
+            #var buffer = InlineArray[Scalar[DType.uint8], bytes_to_read](fill = 0)
             
+            alias w01_sz = INPUT * LAYER1 * LENGTH_KERNEL * LENGTH_KERNEL
+            print("sizeof w01:", w01_sz)
+            alias bytes_to_read = w01_sz * bytes_per_file_weight
+            var bytes = model_file.read_bytes(bytes_to_read)
+            var buffer = InlineArray[Scalar[DType.uint8], bytes_to_read](uninitialized = True)
+            for i in range(bytes_to_read):
+                buffer[i] = bytes[i] # could reverse this here, etc
+            Self.bytesToFType[filetype, bytes_to_read, model.weight0_1.layout](buffer, model.weight0_1)
+            print(model.weight0_1)
+            
+
+            print("sizeof w23:", model.weight2_3.size())
+            print("sizeof w45:", model.weight4_5.size())
+            print("sizeof w56:", model.weight5_6.size())
+            
+            print("sizeof b01:", model.bias0_1.size())
+            print("sizeof b23:", model.bias2_3.size())
+            print("sizeof b45:", model.bias4_5.size())
+            print("sizeof b56:", model.bias5_6.size())
+
         except e:
             print("error at reading lenet5 from file", e)
+        if count != NUM_WEIGHTS:
+            print("ERROR WITH FILE. INCORRECT NUMBER OF WEIGHTS READ")
         return Self()
         
 
@@ -392,10 +478,11 @@ def main():
     var model = LeNet5()
     model.randomizeWeights()
     #print("rank weight0_1 is: ", model.weight0_1.rank)
-
     var feat = Feature()
-
     forward(model, feat)
+
+
+    var model_from_file = LeNet5.fromFile[DType.float64]("model_f64.dat")
     #####################################
 
     alias in_chan = 1
@@ -462,3 +549,41 @@ def main():
                 print(result[i,j,k], end = ", ")
             print()
         print("\n")
+
+    print("size of lenet5:", sizeof[LeNet5]())
+
+    # this dont work LMFAO
+    var test_tl_copy = LayoutTensor[mut = True, ftype, Layout.row_major(in_chan * image_size * image_size), MutableAnyOrigin].stack_allocation()
+    test_tl_copy.copy_from(image)
+    print("test image COPIED")
+    for i in range(image.shape[0]()):
+        for j in range(image.shape[1]()):
+            for k in range(image.shape[2]()):
+                var temp_idx = Int(i * image.shape[1]() * image.shape[2]() + j * image.shape[2]() + k)
+                print(test_tl_copy[temp_idx], end = ", ")
+            print("\n")
+        print("\n\n")
+    
+
+    var test_up = UnsafePointer[Scalar[ftype]].alloc(24)
+    for i in range(24):
+        test_up[i] = i
+    var test_up_tensor = LayoutTensor[ftype, Layout.row_major(2,3,4)](test_up)
+    for i in range(2):
+        for j in range(3):
+            for k in range(4):
+                print(test_up_tensor[i,j,k], end = ", ")
+            print()
+        print()
+
+    print(test_tl_copy.address_space)
+
+
+    alias temp_layout = Layout.row_major(1,2,1,2)
+    var temp_tensor = LayoutTensor[mut = True, ftype, temp_layout, MutableAnyOrigin].stack_allocation()
+    var raw_bytes_list: List[Scalar[DType.uint8]] = [0x3f, 0xa0, 0x00, 0x00, 0x40, 0x68, 0x00, 0x00, 0xbf, 0x80, 0x00, 0x00, 0x42, 0x80, 0x00, 0x00] #1.25, 3.625, -1, 64
+    var raw_bytes = InlineArray[Scalar[DType.uint8], 16](fill = 0)
+    for i in range(16):
+        raw_bytes[i] = raw_bytes_list[i]
+    LeNet5.bytesToFType[DType.float32, 16, temp_layout](raw_bytes, temp_tensor)
+    print(temp_tensor)
