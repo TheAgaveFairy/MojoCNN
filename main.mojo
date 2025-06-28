@@ -1,5 +1,3 @@
-import lenet
-
 from layout import Layout, LayoutTensor, print_layout#, LayoutTensorIter
 from layout.layout_tensor import LayoutTensorIter
 from math import sqrt
@@ -46,16 +44,31 @@ alias PADDED_SIZE = IMAGE_SIZE + 2 * PADDING # 32 x 32 is what we want eventuall
 alias ftype = DType.float32 # model's float type. pixels are uint8 (bytes), non-negotiable
 
 struct LeNet5():
-    # LayoutTensor[ftype, Layout.row_major(INPUT, LAYER1, LENGTH_KERNEL, LENGTH_KERNEL)]()
-    var weight0_1: LayoutTensor[mut = True, ftype, Layout.row_major(INPUT, LAYER1, LENGTH_KERNEL, LENGTH_KERNEL), MutableAnyOrigin]
-    var weight2_3: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER2, LAYER3, LENGTH_KERNEL, LENGTH_KERNEL), MutableAnyOrigin]
-    var weight4_5: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER4, LAYER5, LENGTH_KERNEL, LENGTH_KERNEL), MutableAnyOrigin]
-    var weight5_6: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER5 * LENGTH_FEATURE5 * LENGTH_FEATURE5, OUTPUT), MutableAnyOrigin]
+    # WEIGHTS
+    alias w0_1_layout = Layout.row_major(INPUT, LAYER1, LENGTH_KERNEL, LENGTH_KERNEL)
+    var weight0_1: LayoutTensor[mut = True, ftype, LeNet5.w0_1_layout, MutableAnyOrigin]
+    
+    alias w2_3_layout = Layout.row_major(LAYER2, LAYER3, LENGTH_KERNEL, LENGTH_KERNEL)
+    var weight2_3: LayoutTensor[mut = True, ftype, LeNet5.w2_3_layout, MutableAnyOrigin]
+    
+    alias w4_5_layout = Layout.row_major(LAYER4, LAYER5, LENGTH_KERNEL, LENGTH_KERNEL)
+    var weight4_5: LayoutTensor[mut = True, ftype, LeNet5.w4_5_layout, MutableAnyOrigin]
+    
+    alias w5_6_layout = Layout.row_major(LAYER5 * LENGTH_FEATURE5 *  LENGTH_FEATURE5, OUTPUT)
+    var weight5_6: LayoutTensor[mut = True, ftype, LeNet5.w5_6_layout, MutableAnyOrigin]
 
-    var bias0_1: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER1), MutableAnyOrigin]
-    var bias2_3: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER3), MutableAnyOrigin]
-    var bias4_5: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER5), MutableAnyOrigin]
-    var bias5_6: LayoutTensor[mut = True, ftype, Layout.row_major(OUTPUT), MutableAnyOrigin]
+    # BIASES
+    alias b0_1_layout = Layout.row_major(LAYER1)
+    var bias0_1: LayoutTensor[mut = True, ftype, LeNet5.b0_1_layout, MutableAnyOrigin]
+    
+    alias b2_3_layout = Layout.row_major(LAYER3)
+    var bias2_3: LayoutTensor[mut = True, ftype, LeNet5.b2_3_layout, MutableAnyOrigin]
+    
+    alias b4_5_layout = Layout.row_major(LAYER5)
+    var bias4_5: LayoutTensor[mut = True, ftype, LeNet5.b4_5_layout, MutableAnyOrigin]
+    
+    alias b5_6_layout = Layout.row_major(OUTPUT)
+    var bias5_6: LayoutTensor[mut = True, ftype, LeNet5.b5_6_layout, MutableAnyOrigin]
 
     fn __init__(out self):
         self.weight0_1 = __type_of(self.weight0_1).stack_allocation()
@@ -176,7 +189,7 @@ struct LeNet5():
             var buffer = InlineArray[Scalar[DType.uint8], bytes_to_read](uninitialized = True)
             for i in range(bytes_to_read):
                 buffer[i] = bytes[i] # could reverse this here, etc
-            Self.bytesToFType[filetype, bytes_to_read, model.weight0_1.layout](buffer, model.weight0_1)
+            #Self.bytesToFType[filetype, bytes_to_read, model.weight0_1.layout](buffer, model.weight0_1)
             print(model.weight0_1)
             
 
@@ -197,14 +210,26 @@ struct LeNet5():
         
 
 struct Feature():
-    # LayoutTensor[ftype, Layout.row_major(INPUT, LAYER1, LENGTH_KERNEL, LENGTH_KERNEL)]()
-    var input: LayoutTensor[mut = True, ftype, Layout.row_major(INPUT, LENGTH_FEATURE0, LENGTH_FEATURE0), MutableAnyOrigin]
-    var layer1: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER1, LENGTH_FEATURE1, LENGTH_FEATURE1), MutableAnyOrigin]
-    var layer2: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER2, LENGTH_FEATURE2, LENGTH_FEATURE2), MutableAnyOrigin]
-    var layer3: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER3, LENGTH_FEATURE3, LENGTH_FEATURE3), MutableAnyOrigin]
-    var layer4: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4), MutableAnyOrigin]
-    var layer5: LayoutTensor[mut = True, ftype, Layout.row_major(LAYER5, LENGTH_FEATURE5, LENGTH_FEATURE5), MutableAnyOrigin]
-    var output: LayoutTensor[mut = True, ftype, Layout.row_major(OUTPUT), MutableAnyOrigin]
+    alias input_layout = Layout.row_major(INPUT, LENGTH_FEATURE0, LENGTH_FEATURE0)
+    var input: LayoutTensor[mut = True, ftype, Feature.input_layout, MutableAnyOrigin]
+
+    alias layer1_layout = Layout.row_major(LAYER1, LENGTH_FEATURE1, LENGTH_FEATURE1)
+    var layer1: LayoutTensor[mut = True, ftype, Feature.layer1_layout, MutableAnyOrigin]
+
+    alias layer2_layout = Layout.row_major(LAYER2, LENGTH_FEATURE2, LENGTH_FEATURE2)
+    var layer2: LayoutTensor[mut = True, ftype, Feature.layer2_layout, MutableAnyOrigin]
+
+    alias layer3_layout = Layout.row_major(LAYER3, LENGTH_FEATURE3, LENGTH_FEATURE3)
+    var layer3: LayoutTensor[mut = True, ftype, Feature.layer3_layout, MutableAnyOrigin]
+    
+    alias layer4_layout = Layout.row_major(LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4)
+    var layer4: LayoutTensor[mut = True, ftype, Feature.layer4_layout, MutableAnyOrigin]
+    
+    alias layer5_layout = Layout.row_major(LAYER5, LENGTH_FEATURE5, LENGTH_FEATURE5)
+    var layer5: LayoutTensor[mut = True, ftype, Feature.layer5_layout, MutableAnyOrigin]
+    
+    alias output_layout = Layout.row_major(OUTPUT)
+    var output: LayoutTensor[mut = True, ftype, Feature.output_layout, MutableAnyOrigin]
 
     fn __init__(out self):
         self.input = __type_of(self.input).stack_allocation().fill(0.0)
@@ -451,40 +476,7 @@ fn forward(lenet: LeNet5, features: Feature):
 
     matmulForward[LAYER5, LENGTH_FEATURE5, OUTPUT](features.layer5, features.output, lenet.weight5_6, lenet.bias5_6)
 
-def main():
-    #print_layout(ImageLayout)
-
-    var train_data = UnsafePointer[Image].alloc(COUNT_TRAIN)
-    var test_data = UnsafePointer[Image].alloc(COUNT_TEST)
-
-    var temp_count = 2#Int(COUNT_TRAIN / 10000 * 2)
-
-    readData(temp_count, "train", train_data)
-    readData(temp_count, "test", test_data)
-    for i in range(temp_count):
-        var train_image = train_data[i]
-        print("train sample:\n", String(train_image))
-        #print(train_image.toNormalized()[28 * 14])
-
-        var test_image = test_data[i]
-        print("test sample:\n", String(test_image))
-        #print(test_image.toNormalized()[28 * 14])
-
-    train_data.free()
-    test_data.free()
-
-    #####################################
-
-    var model = LeNet5()
-    model.randomizeWeights()
-    #print("rank weight0_1 is: ", model.weight0_1.rank)
-    var feat = Feature()
-    forward(model, feat)
-
-
-    var model_from_file = LeNet5.fromFile[DType.float64]("model_f64.dat")
-    #####################################
-
+def tests():
     alias in_chan = 1
     alias out_chan = 2
     alias image_size = 5
@@ -587,3 +579,39 @@ def main():
         raw_bytes[i] = raw_bytes_list[i]
     LeNet5.bytesToFType[DType.float32, 16, temp_layout](raw_bytes, temp_tensor)
     print(temp_tensor)
+
+def main():
+    #print_layout(ImageLayout)
+
+    var train_data = UnsafePointer[Image].alloc(COUNT_TRAIN)
+    var test_data = UnsafePointer[Image].alloc(COUNT_TEST)
+
+    var temp_count = 2#Int(COUNT_TRAIN / 10000 * 2)
+
+    readData(temp_count, "train", train_data)
+    readData(temp_count, "test", test_data)
+    for i in range(temp_count):
+        var train_image = train_data[i]
+        print("train sample:\n", String(train_image))
+        #print(train_image.toNormalized()[28 * 14])
+
+        var test_image = test_data[i]
+        print("test sample:\n", String(test_image))
+        #print(test_image.toNormalized()[28 * 14])
+
+    train_data.free()
+    test_data.free()
+
+    #####################################
+
+    var model = LeNet5()
+    model.randomizeWeights()
+    #print("rank weight0_1 is: ", model.weight0_1.rank)
+    var feat = Feature()
+    forward(model, feat)
+
+
+    var model_from_file = LeNet5.fromFile[DType.float64]("model_f64.dat")
+    #####################################
+
+    tests()
