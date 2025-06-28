@@ -473,6 +473,19 @@ fn readData(count: Int, test_set: String, ptr: UnsafePointer[Image]):
 fn action(x: Scalar[ftype]) -> Scalar[ftype]:
     return x if x > 0 else 0
 
+fn argMax[layout: Layout](output: LayoutTensor[mut = True, ftype, layout, MutableAnyOrigin]) -> Int:
+    var largest_value: Scalar[ftype] = FloatLiteral[].negative_infinity
+    var pos: Int = 0
+    for i in range(layout.size()): # not super flexible depending on rank
+        var value = rebind[Scalar[ftype]](output[i])
+        if value > largest_value:
+            largest_value = value
+            pos = i
+        #if output[i] > largest_value:
+        #    largest_value = output[i]
+        #    pos = i
+    return pos
+
 fn convoluteForward[in_chan: Int,
                      out_chan: Int,
                      feat_size: Int,
@@ -713,6 +726,7 @@ def main():
     loadInput(test_image, feat)
     forward(model, feat)
     print(feat.output)
+    print(argMax[feat.output_layout](feat.output))
 
     #####################################
 
