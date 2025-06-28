@@ -129,10 +129,11 @@ struct LeNet5():
             for idx in range(tensor.size()):
                 var i = idx // (tensor.shape[1]())
                 var j = idx % (tensor.shape[1]())
+                
                 var buffer = InlineArray[Scalar[DType.uint8], f_sz](uninitialized = True)
                 for bi in range(f_sz):
                     var temp_idx = idx * f_sz + bi
-                    buffer[f_sz - 1 - bi] = bytes[temp_idx]
+                    buffer[bi] = bytes[temp_idx] # f_sz - 1 - bi to reverse
                     #print("into buffer:", buffer[bi])
                 var value = SIMD[filetype, 1].from_bytes[](buffer)
                 #print("val from raw bytes:", value)
@@ -144,10 +145,11 @@ struct LeNet5():
                 var remainder = idx % (tensor.shape[1]() * tensor.shape[2]())
                 var j = remainder // tensor.shape[2]()
                 var k = remainder % tensor.shape[2]()
+
                 var buffer = InlineArray[Scalar[DType.uint8], f_sz](uninitialized = True)
                 for bi in range(f_sz):
                     var temp_idx = idx * f_sz + bi
-                    buffer[f_sz - 1 - bi] = bytes[temp_idx]
+                    buffer[bi] = bytes[temp_idx] # f_sz - 1 - bi to reverse
                     #print("into buffer:", buffer[bi])
                 var value = SIMD[filetype, 1].from_bytes[](buffer)
                 #print("val from raw bytes:", value)
@@ -165,7 +167,7 @@ struct LeNet5():
                 var buffer = InlineArray[Scalar[DType.uint8], f_sz](uninitialized = True)
                 for bi in range(f_sz):
                     var temp_idx = idx * f_sz + bi
-                    buffer[f_sz - 1 - bi] = bytes[temp_idx]
+                    buffer[bi] = bytes[temp_idx] # f_sz - 1 - bi to reverse
                 var value = SIMD[filetype, 1].from_bytes[](buffer)
                 tensor[i,j,k,l] = value.cast[ftype]()
 
@@ -179,28 +181,16 @@ struct LeNet5():
         try:
             var model_file = open(filename, "r")
         
-            #var bytes = model_file.read_bytes(bytes_to_read)
-            #var buffer = InlineArray[Scalar[DType.uint8], bytes_to_read](fill = 0)
-            
-            alias w01_sz = INPUT * LAYER1 * LENGTH_KERNEL * LENGTH_KERNEL
-            print("sizeof w01:", w01_sz)
-            alias bytes_to_read = w01_sz * bytes_per_file_weight
-            var bytes = model_file.read_bytes(bytes_to_read)
-            var buffer = InlineArray[Scalar[DType.uint8], bytes_to_read](uninitialized = True)
-            for i in range(bytes_to_read):
+            alias w01_sz = model.w0_1_layout.size()#INPUT * LAYER1 * LENGTH_KERNEL * LENGTH_KERNEL
+
+            alias w01_bytes_to_read = w01_sz * bytes_per_file_weight
+            var bytes = model_file.read_bytes(w01_bytes_to_read)
+            var buffer = InlineArray[Scalar[DType.uint8], w01_bytes_to_read](uninitialized = True)
+            for i in range(w01_bytes_to_read):
                 buffer[i] = bytes[i] # could reverse this here, etc
-            #Self.bytesToFType[filetype, bytes_to_read, model.weight0_1.layout](buffer, model.weight0_1)
-            print(model.weight0_1)
+            Self.bytesToFType[filetype, w01_bytes_to_read, model.w0_1_layout](buffer, model.weight0_1)
             
 
-            print("sizeof w23:", model.weight2_3.size())
-            print("sizeof w45:", model.weight4_5.size())
-            print("sizeof w56:", model.weight5_6.size())
-            
-            print("sizeof b01:", model.bias0_1.size())
-            print("sizeof b23:", model.bias2_3.size())
-            print("sizeof b45:", model.bias4_5.size())
-            print("sizeof b56:", model.bias5_6.size())
 
         except e:
             print("error at reading lenet5 from file", e)
@@ -240,6 +230,7 @@ struct Feature():
         self.layer5 = __type_of(self.layer5).stack_allocation().fill(0.0)
         self.output = __type_of(self.output).stack_allocation().fill(0.0)
         
+# probably move these into the Image struct ###
 alias PixelLayout = Layout.row_major(IMAGE_SIZE, IMAGE_SIZE)
 alias PixelStorage = InlineArray[Scalar[DType.uint8], IMAGE_SIZE * IMAGE_SIZE]#(uninitialized = True)
 alias PixelTensor = LayoutTensor[mut = True, DType.uint8, PixelLayout] # origin???
@@ -247,6 +238,7 @@ alias PixelTensor = LayoutTensor[mut = True, DType.uint8, PixelLayout] # origin?
 alias DataLayout = Layout.row_major(PADDED_SIZE, PADDED_SIZE)
 alias DataStorage = InlineArray[Scalar[ftype], PADDED_SIZE * PADDED_SIZE]#
 alias DataTensor = LayoutTensor[mut = True, ftype, DataLayout, MutableAnyOrigin] # origin???
+# probably move these into the Image struct ###
 
 struct Image(Stringable, Copyable):
     # we'll store just the 28x28 for now, and write a function to return a padded + normalized version
@@ -614,4 +606,4 @@ def main():
     var model_from_file = LeNet5.fromFile[DType.float64]("model_f64.dat")
     #####################################
 
-    tests()
+    #tests()
