@@ -518,29 +518,29 @@ fn maxPoolForward[num_channels: Int,
                       input: LayoutTensor[mut = True, ftype, Layout.row_major(num_channels, in_feat_size, in_feat_size), MutableAnyOrigin],
                       output: LayoutTensor[mut = True, ftype, Layout.row_major(num_channels, out_feat_size, out_feat_size), MutableAnyOrigin]
                       ):
-    var lenx = input.shape[1]() / output.shape[1]()
-    var leny = input.shape[2]() / output.shape[2]()
+    var lenx = input.shape[1]() // output.shape[1]()
+    var leny = input.shape[2]() // output.shape[2]()
     for c in range(output.shape[0]()): # each channel
         for i in range(output.shape[1]()): # feature size
             for j in range(output.shape[2]()): # feature size (should match shape[1]())
                 
                 var x0: Int = 0
                 var y0: Int = 0
-                var ismax: Int
+                #var ismax: Int
 
                 for x in range(lenx):
                     for y in range(leny):
                         var temp_idx_x = Int(i * lenx + x)
-                        var temp_idx_y = Int(i * leny + y)
+                        var temp_idx_y = Int(j * leny + y)
                         var temp_idx_xx = Int(i * lenx + x0)
-                        var temp_idx_yy = Int(i * leny + y0)
+                        var temp_idx_yy = Int(j * leny + y0)
                         
-                        ismax = 1 if input[c, temp_idx_x, temp_idx_y] > input[c, temp_idx_xx, temp_idx_yy] else 0
+                        var ismax = 1 if input[c, temp_idx_x, temp_idx_y] > input[c, temp_idx_xx, temp_idx_yy] else 0
                         x0 += Int(ismax * (x - x0))
                         y0 += Int(ismax * (y - y0))
                 
                 var temp_idx_xx = Int(i * lenx + x0)
-                var temp_idx_yy = Int(i * leny + y0)
+                var temp_idx_yy = Int(j * leny + y0)
 
                 output[c, i, j] = input[c, temp_idx_xx, temp_idx_yy] 
 
@@ -590,7 +590,7 @@ fn forward(lenet: LeNet5, features: Feature):
 def tests():
     alias in_chan = 1
     alias out_chan = 2
-    alias image_size = 5
+    alias image_size = 6
     alias kernel_size = 3
     alias final_size = image_size - kernel_size + 1
 
@@ -623,6 +623,12 @@ def tests():
                 print(image[i, j, k], end = ", ")
             print("\n")
         print("\n\n")
+
+    var pooled_image = LayoutTensor[mut = True, ftype, Layout.row_major(in_chan, image_size // 2, image_size // 2), MutableAnyOrigin].stack_allocation()
+
+    print("pooling")
+    maxPoolForward[1, image_size, image_size // 2](image, pooled_image)
+    print(pooled_image)
 
     var result = LayoutTensor[mut = True, ftype, Layout.row_major(out_chan,final_size,final_size), MutableAnyOrigin].stack_allocation().fill(0.0)
     #CONVOLUTION_FORWARD(features->input, features->layer1, lenet->weight0_1, lenet->bias0_1, action);
@@ -732,3 +738,6 @@ def main():
 
     train_data.free()
     test_data.free()
+
+
+    tests()
