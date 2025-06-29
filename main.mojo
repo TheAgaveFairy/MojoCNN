@@ -71,15 +71,24 @@ struct LeNet5(Copyable):
     var bias5_6: LayoutTensor[mut = True, ftype, LeNet5.b5_6_layout, MutableAnyOrigin]
 
     fn __init__(out self):
-        self.weight0_1 = __type_of(self.weight0_1).stack_allocation()
-        self.weight2_3 = __type_of(self.weight2_3).stack_allocation()
-        self.weight4_5 = __type_of(self.weight4_5).stack_allocation()
-        self.weight5_6 = __type_of(self.weight5_6).stack_allocation()
+        var w01_storage = UnsafePointer[Scalar[ftype]].alloc(Self.w0_1_layout.size())
+        self.weight0_1 = __type_of(self.weight0_1)(w01_storage)
+        var w23_storage = UnsafePointer[Scalar[ftype]].alloc(Self.w2_3_layout.size())
+        self.weight2_3 = __type_of(self.weight2_3)(w23_storage)
+        var w45_storage = UnsafePointer[Scalar[ftype]].alloc(Self.w4_5_layout.size())
+        self.weight4_5 = __type_of(self.weight4_5)(w45_storage)
+        var w56_storage = UnsafePointer[Scalar[ftype]].alloc(Self.w5_6_layout.size())
+        self.weight5_6 = __type_of(self.weight5_6)(w56_storage)
 
-        self.bias0_1 = __type_of(self.bias0_1).stack_allocation()
-        self.bias2_3 = __type_of(self.bias2_3).stack_allocation()
-        self.bias4_5 = __type_of(self.bias4_5).stack_allocation()
-        self.bias5_6 = __type_of(self.bias5_6).stack_allocation()
+        # BIASES, no more .stack_allocation()
+        var b01_storage = UnsafePointer[Scalar[ftype]].alloc(Self.b0_1_layout.size())
+        self.bias0_1 = __type_of(self.bias0_1)(b01_storage)
+        var b23_storage = UnsafePointer[Scalar[ftype]].alloc(Self.b2_3_layout.size())
+        self.bias2_3 = __type_of(self.bias2_3)(b23_storage)
+        var b45_storage = UnsafePointer[Scalar[ftype]].alloc(Self.b4_5_layout.size())
+        self.bias4_5 = __type_of(self.bias4_5)(b45_storage)
+        var b56_storage = UnsafePointer[Scalar[ftype]].alloc(Self.b5_6_layout.size())
+        self.bias5_6 = __type_of(self.bias5_6)(b56_storage)
 
     fn __copyinit__(out self, other: Self):
         self.weight0_1 = other.weight0_1
@@ -145,6 +154,7 @@ struct LeNet5(Copyable):
                     var temp_idx = idx * f_sz + bi
                     buffer[bi] = bytes[temp_idx] # f_sz - 1 - bi to reverse
                 var value = SIMD[filetype, 1].from_bytes[](buffer)
+                #print(value, end = ", ")
                 tensor[i] = value.cast[ftype]()
 
         if tensor.layout.rank() == 2: # why can't i use "tensor.rank()"?????
@@ -158,7 +168,7 @@ struct LeNet5(Copyable):
                     buffer[bi] = bytes[temp_idx] # f_sz - 1 - bi to reverse
                     #print("into buffer:", buffer[bi])
                 var value = SIMD[filetype, 1].from_bytes[](buffer)
-                #print("val from raw bytes:", value)
+                #print(value, end = ", ")
                 tensor[i,j] = value.cast[ftype]()
         
         if tensor.layout.rank() == 3: # why can't i use "tensor.rank()"?????
@@ -174,7 +184,7 @@ struct LeNet5(Copyable):
                     buffer[bi] = bytes[temp_idx] # f_sz - 1 - bi to reverse
                     #print("into buffer:", buffer[bi])
                 var value = SIMD[filetype, 1].from_bytes[](buffer)
-                #print("val from raw bytes:", value)
+                #print(value, end = ", ")
                 tensor[i,j,k] = value.cast[ftype]()
                 
         if tensor.layout.rank() == 4: # why can't i use "tensor.rank()"?????
@@ -191,6 +201,7 @@ struct LeNet5(Copyable):
                     var temp_idx = idx * f_sz + bi
                     buffer[bi] = bytes[temp_idx] # f_sz - 1 - bi to reverse
                 var value = SIMD[filetype, 1].from_bytes[](buffer)
+                #print(value, end = ", ")
                 tensor[i,j,k,l] = value.cast[ftype]()
 
     @staticmethod
@@ -212,7 +223,7 @@ struct LeNet5(Copyable):
         .
         """
         alias bytes_per_file_weight = filetype.sizeof()# TODO sizeof[filetype]() won't work, must use filetype.sizeof() why?????
-        print("Loading LeNet5 from ", filename, ". filetype number of bytes:", bytes_per_file_weight)
+        #print("Loading LeNet5 from ", filename, ". filetype number of bytes:", bytes_per_file_weight)
         var model = LeNet5()
 
         try:
@@ -323,98 +334,104 @@ struct Feature():
     var output: LayoutTensor[mut = True, ftype, Feature.output_layout, MutableAnyOrigin]
 
     fn __init__(out self):
-        self.input = __type_of(self.input).stack_allocation().fill(0.0)
-        self.layer1 = __type_of(self.layer1).stack_allocation().fill(0.0)
-        self.layer2 = __type_of(self.layer2).stack_allocation().fill(0.0)
-        self.layer3 = __type_of(self.layer3).stack_allocation().fill(0.0)
-        self.layer4 = __type_of(self.layer4).stack_allocation().fill(0.0)
-        self.layer5 = __type_of(self.layer5).stack_allocation().fill(0.0)
-        self.output = __type_of(self.output).stack_allocation().fill(0.0)
-        
-# probably move these into the Image struct ###
-alias PixelLayout = Layout.row_major(IMAGE_SIZE, IMAGE_SIZE)
-alias PixelStorage = InlineArray[Scalar[DType.uint8], IMAGE_SIZE * IMAGE_SIZE]#(uninitialized = True)
-alias PixelTensor = LayoutTensor[mut = True, DType.uint8, PixelLayout] # origin???
+        var input_storage = UnsafePointer[Scalar[ftype]].alloc(Self.input_layout.size())
+        self.input = __type_of(self.input)(input_storage).fill(0.0)
 
-alias DataLayout = Layout.row_major(PADDED_SIZE, PADDED_SIZE)
-alias DataStorage = InlineArray[Scalar[ftype], PADDED_SIZE * PADDED_SIZE]#
-alias DataTensor = LayoutTensor[mut = True, ftype, DataLayout, MutableAnyOrigin] # origin???
-# probably move these into the Image struct ###
+        var layer1_storage = UnsafePointer[Scalar[ftype]].alloc(Self.layer1_layout.size())
+        self.layer1 = __type_of(self.layer1)(layer1_storage).fill(0.0)
+        
+        var layer2_storage = UnsafePointer[Scalar[ftype]].alloc(Self.layer2_layout.size())
+        self.layer2 = __type_of(self.layer2)(layer2_storage).fill(0.0)
+
+        var layer3_storage = UnsafePointer[Scalar[ftype]].alloc(Self.layer3_layout.size())
+        self.layer3 = __type_of(self.layer3)(layer3_storage).fill(0.0)
+
+        var layer4_storage = UnsafePointer[Scalar[ftype]].alloc(Self.layer4_layout.size())
+        self.layer4 = __type_of(self.layer4)(layer4_storage).fill(0.0)
+
+        var layer5_storage = UnsafePointer[Scalar[ftype]].alloc(Self.layer5_layout.size())
+        self.layer5 = __type_of(self.layer5)(layer5_storage).fill(0.0)
+
+        var output_storage = UnsafePointer[Scalar[ftype]].alloc(Self.output_layout.size())
+        self.output = __type_of(self.output)(output_storage).fill(0.0)
+
 
 struct Image(Stringable, Copyable):
-    # we'll store just the 28x28 for now, and write a function to return a padded + normalized version
-    var pixels: PixelStorage
-    var label: UInt8 # [0, 9]
+    alias PixelLayout = Layout.row_major(IMAGE_SIZE, IMAGE_SIZE)
+    alias PixelStorage = InlineArray[UInt8, Self.PixelLayout.size()]#(uninitialized = True)
+    alias PixelTensor = LayoutTensor[mut = True, DType.uint8, Self.PixelLayout, MutableAnyOrigin]
+
+    alias DataLayout = Layout.row_major(PADDED_SIZE, PADDED_SIZE)
+    alias DataStorage = InlineArray[Scalar[ftype], Self.DataLayout.size()]#
+    alias DataTensor = LayoutTensor[mut = True, ftype, Self.DataLayout, MutableAnyOrigin]
+    
+    var pixels: Self.PixelTensor
+    var label: UInt8 # digits [0, 9] MNIST
 
     fn __init__(out self, ptr: UnsafePointer[UInt8], label: UInt8):
-        # just stores raw pixel values, normalizing is separate. wasteful and inefficient, i suppose
-        #var temp_pixels = InlineArray[Scalar[DType.uint8], IMAGE_SIZE * IMAGE_SIZE](fill = 0)
-        var temp_pixels = PixelStorage(uninitialized = True)
+        if label > 9:
+            print("Error with incoming label for image:", label)
+        #var storage = InlineArray[UInt8, IMAGE_SIZE * IMAGE_SIZE](uninitialized = True)
+        var storage = UnsafePointer[UInt8].alloc(Self.PixelLayout.size())
+        var temp_pixels = Self.PixelTensor(storage)
         # memcpy probably possible
         for r in range(IMAGE_SIZE):
             for c in range(IMAGE_SIZE):
                 var idx = r * IMAGE_SIZE + c
-                temp_pixels[idx] = ptr[idx]
+                temp_pixels[r, c] = ptr[idx]
 
-        #var tensor = PixelTensor(temp_pixels)
         self.pixels = temp_pixels
         self.label = label
 
-    fn toNormalized(self) -> DataTensor:
-        # normalizes from 28x28 uint8 to zero-padded 32x32 float32 (or whatever type)
-        var storage = DataStorage(fill = 0.0)
-        #mut = False gives a terrible terrible compiler warning, please fix
-        var tensor = DataTensor.stack_allocation()
+    #fn __del__(owned self): who the fuck does this and when
+    #    self.pixels.free()
 
-        var mean: Float32
-        var std: Scalar[ftype]
+    fn toNormalized(self) -> Self.DataTensor:
+        """
+        Normalizes from 28x28 uint8 to zero-padded 32x32 float32 (or whatever ftype is for the model).
+        """
+        #mut = False gives a terrible terrible compiler warning, please fix, as an aside for making LayoutTensors
+        var storage = UnsafePointer[Scalar[ftype]].alloc(Self.DataLayout.size())
+        var tensor = Self.DataTensor(storage).fill(0.0)
 
-        var sum: UInt32 = 0
-        var std_sum: UInt32 = 0
+        var mean: Float64
+        var std: Float64
+
+        var sum: UInt64 = 0
+        var std_sum: UInt64 = 0
         for r in range(IMAGE_SIZE):
             for c in range(IMAGE_SIZE):
-                var idx = r * IMAGE_SIZE + c
-                sum += UInt(self.pixels[idx]) # not taking advantage of SIMD possibly?
-                std_sum += (UInt32(self.pixels[idx]) * UInt32(self.pixels[idx]))
+                sum += UInt(self.pixels[r, c]) # not taking advantage of SIMD possibly?
+                std_sum += Int(self.pixels[r, c].cast[DType.uint64]() * self.pixels[r, c].cast[DType.uint64]()) # rebind[UInt64]
         
         alias num_elems = IMAGE_SIZE * IMAGE_SIZE
-        mean = Float32(sum) / num_elems
-        var temp = Float32(std_sum) / num_elems - mean * mean
+        mean = Float64(sum) / num_elems
+        var temp = Float64(std_sum) / num_elems - mean * mean
         std = sqrt(temp)
-        #print("sum, std_sum, mean, std", sum, std_sum, mean, std)
 
         for r in range(IMAGE_SIZE):
             for c in range(IMAGE_SIZE):
-                var idx = r * IMAGE_SIZE + c
-                var new_idx = (r + PADDING) * (IMAGE_SIZE + PADDING * 2) + (c + PADDING)
-                # new_idx only adds padding once so it's centered
-
-                tensor[r + PADDING, c + PADDING] = (Float32(self.pixels[idx]) - mean) / std
-                storage[new_idx] = (Float32(self.pixels[idx]) - mean) / std
+                tensor[r + PADDING, c + PADDING] = ((Float64(self.pixels[r, c]) - mean) / std).cast[ftype]()
          
-        #return storage
         return tensor # who manages this memory honestly
 
     fn __str__(self) -> String:
-        var temp: String = "Label: " + String(self.label) + "\n"
-        for row in range(IMAGE_SIZE):
-            for col in range(IMAGE_SIZE):
-                var idx = row * IMAGE_SIZE + col
-                #temp += String(self.pixels[idx]) + ", "
-                
-                if self.pixels[idx] < 32:
+        var temp: String = "Raw From File -> Label: " + String(self.label) + "\n"
+        for r in range(self.pixels.shape[0]()): # rows
+            for c in range(self.pixels.shape[1]()): # cols
+                if self.pixels[r, c] < 32:
                     temp += " "
-                elif self.pixels[idx] < 64:
+                elif self.pixels[r, c] < 64:
                     temp += "."
-                elif self.pixels[idx] < 96:
+                elif self.pixels[r, c] < 96:
                     temp += ","
-                elif self.pixels[idx] < 128:
+                elif self.pixels[r, c] < 128:
                     temp += "o"
-                elif self.pixels[idx] < 160:
+                elif self.pixels[r, c] < 160:
                     temp += "x"
-                elif self.pixels[idx] < 192:
+                elif self.pixels[r, c] < 192:
                     temp += "$"
-                elif self.pixels[idx] < 224:
+                elif self.pixels[r, c] < 224:
                     temp += "&"
                 else:
                     temp += "#"
@@ -427,7 +444,7 @@ struct Image(Stringable, Copyable):
         self.label = other.label
 
 fn readData(count: Int, test_set: String, ptr: UnsafePointer[Image]):
-    print("Reading images in from", test_set)
+    #print("Reading images in from", test_set)
     var data_filename: String = FILE_TEST_IMAGE
     var label_filename: String = FILE_TEST_LABEL
     if test_set == "train":
@@ -443,26 +460,19 @@ fn readData(count: Int, test_set: String, ptr: UnsafePointer[Image]):
         alias buffer_size = IMAGE_SIZE * IMAGE_SIZE
         var image_buffer = UnsafePointer[UInt8].alloc(buffer_size)
         
-        for i in range(count): # need to copy over, this is awful. yikes.
+        for c in range(count): # need to copy over, this is awful. yikes.
             var data_list = data_file.read_bytes(buffer_size)
             
             var temp = label_file.read_bytes(1)
-            #print("temp: ", temp[1])
             var data_label: UInt8 = temp[0]
 
-            #print("label: ", data_label)
             for i in range(IMAGE_SIZE):
                 for j in range(IMAGE_SIZE):
                     idx = i * IMAGE_SIZE + j
                     image_buffer[idx] = data_list[idx]
-                    #print(data_list[i * IMAGE_SIZE + j], end = ", ")
-                #print()
 
             var test_image = Image(image_buffer, data_label)
-            #print(String(test_image))
-            #var testing_delete_me = test_image.toNormalized()
-            ptr[i] = test_image
-            
+            ptr[c] = test_image
 
         data_file.close()
         label_file.close()
@@ -481,9 +491,6 @@ fn argMax[layout: Layout](output: LayoutTensor[mut = True, ftype, layout, Mutabl
         if value > largest_value:
             largest_value = value
             pos = i
-        #if output[i] > largest_value:
-        #    largest_value = output[i]
-        #    pos = i
     return pos
 
 fn convoluteForward[in_chan: Int,
@@ -508,7 +515,8 @@ fn convoluteForward[in_chan: Int,
     for c in range(result.shape[0]()):
         for i in range(result.shape[1]()):
             for j in range(result.shape[2]()):
-                result[c, i, j] = result[c, i, j] if result[c, i, j] > 0.0 else 0.0 + bias[c]
+                result[c, i, j] += bias[c]
+                result[c, i, j] = result[c, i, j] if result[c, i, j] > 0.0 else 0.0 
 
 # SUBSAMP_MAX_FORWARD(features->layer1, features->layer2);
 fn maxPoolForward[num_channels: Int,
@@ -562,8 +570,8 @@ fn matmulForward[num_chan: Int,
             for f in range(feat_size):
                 output[y] += input[x, f, f] * weight[x, y]
     for i in range(output.shape[0]()):
-        output[i] = output[i] if output[i] > 0 else 0
         output[i] += bias[i]
+        output[i] = output[i] if output[i] > 0 else 0
 
 fn loadInput(image: Image, features: Feature):
     var normed = image.toNormalized() # (32, 32) -> (1, 32, 32)
@@ -705,8 +713,8 @@ def main():
 
     var temp_count = 2#Int(COUNT_TRAIN / 10000 * 2)
 
-    readData(temp_count, "train", train_data)
-    readData(temp_count, "test", test_data)
+    readData(COUNT_TRAIN, "train", train_data)
+    readData(COUNT_TEST, "test", test_data)
     _ = """
     for i in range(temp_count):
         var train_image = train_data[i]
@@ -725,19 +733,35 @@ def main():
     #model.randomizeWeights()
 
     var model = LeNet5.fromFile[DType.float64]("model_f64.dat")
-    var feat = Feature()
+    var feat: Feature
+    var correct = 0
+    for c in range(COUNT_TEST):
+        feat = Feature()
+        var img = test_data[c]
+        loadInput(img, feat)
+        forward(model, feat)
+        var pred: UInt8 = argMax[feat.output_layout](feat.output)
+        print("Prediction: ", pred)
+        if pred != img.label:
+            print(String(img))
+            correct -= 1
+        correct += 1
+    print("test results:", correct, "correct out of ", COUNT_TEST, "=", correct / COUNT_TEST * 100, "%")
+    
+    _ = """
     var test_image = test_data[0]
     #print(test_data[0].toNormalized().layout, feat.input.layout)
     print(String(test_image))
     loadInput(test_image, feat)
     forward(model, feat)
     print(feat.output)
-    print(argMax[feat.output_layout](feat.output))
-
+    print("Prediction: ", argMax[feat.output_layout](feat.output))
+    """
     #####################################
 
+    # for losers
     train_data.free()
     test_data.free()
 
 
-    tests()
+    # tests()
