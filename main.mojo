@@ -741,23 +741,14 @@ def main():
         loadInput(img, feat)
         forward(model, feat)
         var pred: UInt8 = argMax[feat.output_layout](feat.output)
-        print("Prediction: ", pred)
+        print(pred, end = ", ")
         if pred != img.label:
+            print("\n\tLast Is Incorrect, Actual:")
             print(String(img))
             correct -= 1
         correct += 1
     print("test results:", correct, "correct out of ", COUNT_TEST, "=", correct / COUNT_TEST * 100, "%")
     
-    _ = """
-    var test_image = test_data[0]
-    #print(test_data[0].toNormalized().layout, feat.input.layout)
-    print(String(test_image))
-    loadInput(test_image, feat)
-    forward(model, feat)
-    print(feat.output)
-    print("Prediction: ", argMax[feat.output_layout](feat.output))
-    """
-    #####################################
 
     # for losers
     train_data.free()
