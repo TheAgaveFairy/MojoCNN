@@ -1,13 +1,15 @@
 from layout import Layout, LayoutTensor, print_layout#, LayoutTensorIter
 from layout.layout_tensor import LayoutTensorIter
-from math import sqrt
+from math import sqrt, exp
 from random import random_float64
 from sys.info import sizeof
+from sys import stderr
+from utils.index import IndexList
 #import simd
+from time import perf_counter_ns
 import os
 
-
-#alias DEBUG = False
+#note this technically isn't LeNet5 as some of the final connections are full instead of sparse, see their paper
 
 alias FILE_TRAIN_IMAGE =    "train-images-idx3-ubyte"
 alias FILE_TRAIN_LABEL =    "train-labels-idx1-ubyte"
@@ -72,23 +74,29 @@ struct LeNet5(Copyable):
 
     fn __init__(out self):
         var w01_storage = UnsafePointer[Scalar[ftype]].alloc(Self.w0_1_layout.size())
-        self.weight0_1 = __type_of(self.weight0_1)(w01_storage)
+        self.weight0_1 = __type_of(self.weight0_1)(w01_storage).fill(0.0)
+
         var w23_storage = UnsafePointer[Scalar[ftype]].alloc(Self.w2_3_layout.size())
-        self.weight2_3 = __type_of(self.weight2_3)(w23_storage)
+        self.weight2_3 = __type_of(self.weight2_3)(w23_storage).fill(0.0)
+        
         var w45_storage = UnsafePointer[Scalar[ftype]].alloc(Self.w4_5_layout.size())
-        self.weight4_5 = __type_of(self.weight4_5)(w45_storage)
+        self.weight4_5 = __type_of(self.weight4_5)(w45_storage).fill(0.0)
+        
         var w56_storage = UnsafePointer[Scalar[ftype]].alloc(Self.w5_6_layout.size())
-        self.weight5_6 = __type_of(self.weight5_6)(w56_storage)
+        self.weight5_6 = __type_of(self.weight5_6)(w56_storage).fill(0.0)
 
         # BIASES, no more .stack_allocation()
         var b01_storage = UnsafePointer[Scalar[ftype]].alloc(Self.b0_1_layout.size())
-        self.bias0_1 = __type_of(self.bias0_1)(b01_storage)
+        self.bias0_1 = __type_of(self.bias0_1)(b01_storage).fill(0.0)
+        
         var b23_storage = UnsafePointer[Scalar[ftype]].alloc(Self.b2_3_layout.size())
-        self.bias2_3 = __type_of(self.bias2_3)(b23_storage)
+        self.bias2_3 = __type_of(self.bias2_3)(b23_storage).fill(0.0)
+        
         var b45_storage = UnsafePointer[Scalar[ftype]].alloc(Self.b4_5_layout.size())
-        self.bias4_5 = __type_of(self.bias4_5)(b45_storage)
+        self.bias4_5 = __type_of(self.bias4_5)(b45_storage).fill(0.0)
+        
         var b56_storage = UnsafePointer[Scalar[ftype]].alloc(Self.b5_6_layout.size())
-        self.bias5_6 = __type_of(self.bias5_6)(b56_storage)
+        self.bias5_6 = __type_of(self.bias5_6)(b56_storage).fill(0.0)
 
     fn __copyinit__(out self, other: Self):
         self.weight0_1 = other.weight0_1
@@ -101,6 +109,17 @@ struct LeNet5(Copyable):
         self.bias4_5 = other.bias4_5
         self.bias5_6 = other.bias5_6
     
+    fn accumulateFromOther(mut self, other: Self, lr: Scalar[ftype]):
+        self.weight0_1 += other.weight0_1 * lr
+        self.weight2_3 += other.weight2_3 * lr 
+        self.weight4_5 += other.weight4_5 * lr
+        self.weight5_6 += other.weight5_6 * lr
+
+        self.bias0_1 += other.bias0_1 * lr
+        self.bias2_3 += other.bias2_3 * lr 
+        self.bias4_5 += other.bias4_5 * lr 
+        self.bias5_6 += other.bias5_6 * lr
+
     fn randomizeWeights(self):
         #var iter = LayoutTensorIter[ftype, Layout.row_major(1024)](self.weight0_1)
         for i in range(self.weight0_1.shape[0]()):
@@ -493,6 +512,106 @@ fn argMax[layout: Layout](output: LayoutTensor[mut = True, ftype, layout, Mutabl
             pos = i
     return pos
 
+fn softMax[count: Int](input: LayoutTensor[ftype, Layout.row_major(count), MutableAnyOrigin], loss: LayoutTensor[ftype, Layout.row_major(count), MutableAnyOrigin], label: Int) -> None:
+    var inner: loss.element_type = 0
+    @parameter
+    for i in range(count):
+        var res: input.element_type = 0
+        for j in range(count):
+            res += exp(input[j] - input[i])
+        loss[i] = 1 / res
+        inner -= loss[i] * loss[i]
+
+    inner += loss[label]
+    for i in range(count):
+        var temp = 1 if i == label else 0
+        loss[i] *= temp - loss[i] - inner
+
+fn loadTarget(features: Feature, errors: Feature, label: Int) -> None:
+    softMax[OUTPUT](features.output, errors.output, label)
+
+#define CONVOLUTION_BACKWARD(input,inerror,outerror,weight,wd,bd,actiongrad)
+#CONVOLUTION_BACKWARD(features->layer4, errors->layer4, errors->layer5, lenet->weight4_5, deltas->weight4_5, deltas->bias4_5, actiongrad);
+# actiongrad (return x > 0);
+fn convoluteBackward[in_chan: Int,
+                     out_chan: Int,
+                     feat_size: Int,
+                     kernel_size: Int,
+                     ](
+                             input: LayoutTensor[ftype, Layout.row_major(in_chan, feat_size, feat_size), MutableAnyOrigin],
+                             inerror: LayoutTensor[ftype, Layout.row_major(in_chan, feat_size, feat_size), MutableAnyOrigin],
+                             outerror: LayoutTensor[ftype, Layout.row_major(out_chan, feat_size - kernel_size + 1, feat_size - kernel_size + 1), MutableAnyOrigin],
+                             weight: LayoutTensor[ftype, Layout.row_major(in_chan, out_chan, kernel_size, kernel_size), MutableAnyOrigin],
+                             wdeltas: LayoutTensor[ftype, Layout.row_major(in_chan, out_chan, kernel_size, kernel_size), MutableAnyOrigin],
+                             bdeltas: LayoutTensor[ftype, Layout.row_major(out_chan), MutableAnyOrigin]):
+
+    alias out_feat_size = feat_size - kernel_size + 1
+    # do things
+    @parameter
+    for x in range(in_chan):
+        for y in range(out_chan):
+            #outerror[y] inerror[x] weight[x][y] -> input output weight
+            var inerror_slice = rebind[LayoutTensor[ftype, Layout.row_major(feat_size, feat_size), MutableAnyOrigin]](inerror.slice[Slice(0, feat_size), Slice(0, feat_size), IndexList[2](1,2)](IndexList[2](x)))
+
+            var weight_slice = rebind[LayoutTensor[ftype, Layout.row_major(kernel_size, kernel_size), MutableAnyOrigin]](weight.slice[Slice(0, kernel_size), Slice(0, kernel_size), IndexList[2](2,3)](IndexList[2](x,y))) # check shapes
+
+            var outerror_slice = rebind[LayoutTensor[ftype, Layout.row_major(out_feat_size, out_feat_size), MutableAnyOrigin]](outerror.slice[Slice(0, out_feat_size), Slice(0, out_feat_size), IndexList[2](1,2)](IndexList[2](y)))
+            
+            convoluteFull[feat_size, kernel_size](weight_slice, outerror_slice, inerror_slice )
+            
+
+    @parameter
+    for c in range(in_chan): # each element gets "actiongrad"
+        for m in range(feat_size):
+            for n in range(feat_size):
+                inerror[c, m, n] = inerror[c, m, n] if inerror[c, m, n] > 0 else 0
+    
+    @parameter
+    for c in range(out_chan):
+        for i in range(out_feat_size):
+            for j in range(out_feat_size):
+                bdeltas[c] += outerror[c, i, j]
+
+    for x in range(in_chan):
+        for y in range(out_chan):
+            #input[x], wd[x][y], outerror[y]
+            var input_slice = rebind[LayoutTensor[ftype, Layout.row_major(feat_size, feat_size), MutableAnyOrigin]](input.slice[Slice(0, feat_size), Slice(0, feat_size), IndexList[2](1,2)](IndexList[2](x)))
+
+            var wdeltas_slice = rebind[LayoutTensor[ftype, Layout.row_major(kernel_size, kernel_size), MutableAnyOrigin]](wdeltas.slice[Slice(0, kernel_size), Slice(0, kernel_size), IndexList[2](2,3)](IndexList[2](x,y))) # check shapes
+
+            var outerror_slice = rebind[LayoutTensor[ftype, Layout.row_major(out_feat_size, out_feat_size), MutableAnyOrigin]](outerror.slice[Slice(0, out_feat_size), Slice(0, out_feat_size), IndexList[2](1,2)](IndexList[2](y)))
+            
+            convoluteValid[feat_size, kernel_size](wdeltas_slice, input_slice, outerror_slice)
+
+
+# CONVOLUTE_VALID(input,output,weight) became (weight, input, output)
+fn convoluteValid[feat_size: Int,
+                     kernel_size: Int,
+                     ](
+                        kernel: LayoutTensor[mut = True, ftype, Layout.row_major(kernel_size, kernel_size), MutableAnyOrigin],
+                        image: LayoutTensor[mut = True, ftype, Layout.row_major(feat_size, feat_size), MutableAnyOrigin],
+                        result: LayoutTensor[mut = True, ftype, Layout.row_major(feat_size - kernel_size + 1, feat_size - kernel_size + 1), MutableAnyOrigin]
+                     ) -> None:
+    for i in range(result.shape[0]()): # each output pixel row
+        for j in range(result.shape[1]()): # each output pixel column
+            for a in range(kernel.shape[0]()): # for each weight row of a kernel
+                for b in range(kernel.shape[1]()): # for each weight col of a kernel
+                    result[i, j] +=  image[i + a, j + b] * kernel[a, b]
+
+# CONVOLUTE_FULL(input,output,weight)	                   
+fn convoluteFull[feat_size: Int,
+                     kernel_size: Int,
+                     ](
+                        kernel: LayoutTensor[mut = True, ftype, Layout.row_major(kernel_size, kernel_size), MutableAnyOrigin],
+                        image: LayoutTensor[mut = True, ftype, Layout.row_major(feat_size - kernel_size + 1, feat_size - kernel_size + 1), MutableAnyOrigin],
+                        result: LayoutTensor[mut = True, ftype, Layout.row_major(feat_size, feat_size), MutableAnyOrigin]
+                     ) -> None:
+    for i in range(image.shape[0]()): # each input pixel row
+        for j in range(image.shape[1]()): # each input pixel column
+            for a in range(kernel.shape[0]()): # for each weight row of a kernel
+                for b in range(kernel.shape[1]()): # for each weight col of a kernel
+                    result[i + a, j + b] +=  image[i, j] * kernel[a, b]
+
 fn convoluteForward[in_chan: Int,
                      out_chan: Int,
                      feat_size: Int,
@@ -503,20 +622,62 @@ fn convoluteForward[in_chan: Int,
                         image: LayoutTensor[mut = True, ftype, Layout.row_major(in_chan, feat_size, feat_size)],
                         result: LayoutTensor[mut = True, ftype, Layout.row_major(out_chan, feat_size - kernel_size + 1, feat_size - kernel_size + 1)]
                      ) -> None:
+    alias out_feat_size = feat_size - kernel_size + 1
     for x in range(kernels.shape[0]()): # number of input channels
         for y in range(kernels.shape[1]()): # number of output channels
+            # slicing syntax (gives a 2d for now) = [ Slice(rows wanted), Slice(cols wanted) IndexList[2](dimensions you want) ] (IndexList[2](dim0, dim1) # etc, or can just be a Scalar offset for each dim to use)
+            var kern_slice = rebind[LayoutTensor[mut = True, ftype, Layout.row_major(kernel_size, kernel_size), MutableAnyOrigin]](kernels.slice[Slice(0, kernel_size), Slice(0, kernel_size), IndexList[2](2,3)](IndexList[2](x,y)))
+            
+            var image_slice = rebind[LayoutTensor[mut = True, ftype, Layout.row_major(feat_size, feat_size), MutableAnyOrigin]](image.slice[Slice(0, feat_size), Slice(0, feat_size), IndexList[2](1,2)](x)) # might be wrong final arg
+
+            var result_slice = rebind[LayoutTensor[mut = True, ftype, Layout.row_major(out_feat_size, out_feat_size), MutableAnyOrigin]](result.slice[Slice(0, out_feat_size), Slice(0, out_feat_size), IndexList[2](1,2)](y))
+
+            convoluteValid[feat_size, kernel_size](kern_slice, image_slice, result_slice)
+
+            _ = """
+            #convoluteValid
             for i in range(result.shape[1]()): # each output pixel row
                 for j in range(result.shape[2]()): # each output pixel column
                     for a in range(kernels.shape[2]()): # for each weight row of a kernel
                         for b in range(kernels.shape[2]()): # for each weight col of a kernel
                             result[y, i, j] +=  image[x, i + a, j + b] * kernels[x, y, a, b]
-
+            """
     # activation function (named "action")
     for c in range(result.shape[0]()):
         for i in range(result.shape[1]()):
             for j in range(result.shape[2]()):
                 result[c, i, j] += bias[c]
                 result[c, i, j] = result[c, i, j] if result[c, i, j] > 0.0 else 0.0 
+
+# SUBSAMP_MAX_BACKWARD(input,inerror,outerror)
+# SUBSAMP_MAX_BACKWARD(features->layer3, errors->layer3, errors->layer4);
+# "out feat size" is from the perspective of the forward pass, sorry if confusing. might want to clear up a lot of names
+fn maxPoolBackward[num_channels: Int,
+                        in_feat_size: Int,
+                        out_feat_size: Int
+                      ](
+                      input: LayoutTensor[mut = True, ftype, Layout.row_major(num_channels, in_feat_size, in_feat_size), MutableAnyOrigin],
+                      inerror: LayoutTensor[mut = True, ftype, Layout.row_major(num_channels, in_feat_size, in_feat_size), MutableAnyOrigin],
+                      outerror: LayoutTensor[mut = True, ftype, Layout.row_major(num_channels, out_feat_size, out_feat_size), MutableAnyOrigin]
+                      ):
+    alias len0 = inerror.shape[1]() // outerror.shape[1]()
+    alias len1 = inerror.shape[2]() // outerror.shape[2]()
+
+    for i in range(num_channels):
+        for o0 in range(out_feat_size):
+            for o1 in range(out_feat_size):
+                var x0 = Int(0)
+                var x1 = Int(0)
+                var ismax: Int
+
+                # branchless approach again
+                for l0 in range(len0):
+                    for l1 in range(len1):
+                        ismax = 1 if input[i, o0 * len0 + l0, o1 * len1 + l1] > input[i, o0 * len0 + x0, o1 * len1 + x1] else 0
+                        x0 += ismax * (l0 - x0)
+                        x1 += ismax * (x1 - x1)
+
+                inerror[i, o0 * len0 + x0, o1 * len1 + x1] = outerror[i, o0, o1]
 
 # SUBSAMP_MAX_FORWARD(features->layer1, features->layer2);
 fn maxPoolForward[num_channels: Int,
@@ -552,6 +713,45 @@ fn maxPoolForward[num_channels: Int,
 
                 output[c, i, j] = input[c, temp_idx_xx, temp_idx_yy] 
 
+# DOT_PRODUCT_BACKWARD(input,inerror,outerror,weight,wd,bd,actiongrad)
+# DOT_PRODUCT_BACKWARD(features->layer5, errors->layer5, errors->output, lenet->weight5_6, deltas->weight5_6, deltas->bias5_6, actiongrad);
+fn matmulBackward[num_chan: Int,
+                     feat_size: Int,
+                     output_size: Int,
+                     ](
+                        input: LayoutTensor[mut = True, ftype, Layout.row_major(num_chan, feat_size, feat_size)],
+                        inerror: LayoutTensor[mut = True, ftype, Layout.row_major(num_chan, feat_size, feat_size)],
+                        outerror: LayoutTensor[mut = True, ftype, Layout.row_major(output_size)],
+                        weight: LayoutTensor[mut = True, ftype, Layout.row_major(num_chan * feat_size * feat_size, output_size)],
+                        wdeltas: LayoutTensor[mut = True, ftype, Layout.row_major(num_chan * feat_size * feat_size, output_size)],
+                        bdeltas: LayoutTensor[mut = True, ftype, Layout.row_major(output_size)]
+                     ) -> None:
+    for x in range(weight.shape[0]()):
+        for y in range(output_size):
+            var ie_i = x // weight.shape[0]()
+            var rem = x % weight.shape[0]()
+            var ie_j = rem // weight.shape[1]()
+            var ie_k = rem % weight.shape[1]()
+            inerror[ie_i, ie_j, ie_k] += outerror[y] * weight[x, y]
+
+    for i in range(num_chan):
+        for j in range(feat_size):
+            for k in range(feat_size):
+                inerror[i, j, k] = inerror[i, j, k] if input[i, j, k] > 0 else 0
+
+    for i in range(output_size):
+        bdeltas[i] += outerror[i]
+
+    for x in range(weight.shape[0]()):
+        for y in range(weight.shape[1]()):
+            var ie_i = x // weight.shape[0]()
+            var rem = x % weight.shape[0]()
+            var ie_j = rem // weight.shape[1]()
+            var ie_k = rem % weight.shape[1]()
+            wdeltas[x, y] += input[ie_i, ie_j, ie_k] * outerror[y]
+
+
+
 # 	DOT_PRODUCT_FORWARD(features->layer5, features->output, lenet->weight5_6, lenet->bias5_6, action);
 fn matmulForward[num_chan: Int,
                      feat_size: Int,
@@ -573,7 +773,7 @@ fn matmulForward[num_chan: Int,
         output[i] += bias[i]
         output[i] = output[i] if output[i] > 0 else 0
 
-fn loadInput(image: Image, features: Feature):
+fn loadInput(features: Feature, image: Image):
     var normed = image.toNormalized() # (32, 32) -> (1, 32, 32)
     for i in range(normed.shape[0]()):
         for j in range(normed.shape[1]()):
@@ -595,164 +795,130 @@ fn forward(lenet: LeNet5, features: Feature):
 
     matmulForward[LAYER5, LENGTH_FEATURE5, OUTPUT](features.layer5, features.output, lenet.weight5_6, lenet.bias5_6)
 
-def tests():
-    alias in_chan = 1
-    alias out_chan = 2
-    alias image_size = 6
-    alias kernel_size = 3
-    alias final_size = image_size - kernel_size + 1
+fn backward(lenet: LeNet5, deltas: LeNet5, errors: Feature, features: Feature) -> None:
+    matmulBackward[LAYER5, LENGTH_FEATURE5, OUTPUT](features.layer5, errors.layer5, errors.output, lenet.weight5_6, deltas.weight5_6, deltas.bias5_6)
+                      
+    convoluteBackward[LAYER4, LAYER5, LENGTH_FEATURE4, LENGTH_KERNEL](features.layer4, errors.layer4, errors.layer5, lenet.weight4_5, deltas.weight4_5, deltas.bias4_5)
 
-    print("test kernel")
-    var kernels = LayoutTensor[mut = True, ftype, Layout.row_major(in_chan, out_chan, kernel_size, kernel_size), MutableAnyOrigin].stack_allocation()
-    for i in range(kernels.shape[0]()):
-        for j in range(kernels.shape[1]()):
-            print("chan", i, "->", j)
-            for k in range(kernels.shape[2]()):
-                for l in range(kernels.shape[3]()):
-                    kernels[i, j, k, l] = i + j + k + l
-                    print(kernels[i,j,k,l], end = ", ")
-                print()
-            print()
-        print("\n")
+    maxPoolBackward[LAYER3, LENGTH_FEATURE3, LENGTH_FEATURE4](features.layer3, errors.layer3, errors.layer4)
 
-    print("test bias")
-    var bias = LayoutTensor[mut = True, ftype, Layout.row_major(out_chan), MutableAnyOrigin].stack_allocation()
-    for i in range(bias.shape[0]()):
-        bias[i] = 0.0005
-        print(bias[i], end = ", ")
-    print("\n")
+    convoluteBackward[LAYER2, LAYER3, LENGTH_FEATURE2, LENGTH_KERNEL](features.layer2, errors.layer2, errors.layer3, lenet.weight2_3, deltas.weight2_3, deltas.bias2_3)
 
-    print("test image")
-    var image = LayoutTensor[mut = True, ftype, Layout.row_major(in_chan, image_size, image_size), MutableAnyOrigin].stack_allocation()
-    for i in range(image.shape[0]()):
-        for j in range(image.shape[1]()):
-            for k in range(image.shape[2]()):
-                image[i, j, k] = j - k
-                print(image[i, j, k], end = ", ")
-            print("\n")
-        print("\n\n")
+    maxPoolBackward[LAYER1, LENGTH_FEATURE1, LENGTH_FEATURE2](features.layer1, errors.layer1, errors.layer2)
 
-    var pooled_image = LayoutTensor[mut = True, ftype, Layout.row_major(in_chan, image_size // 2, image_size // 2), MutableAnyOrigin].stack_allocation()
+    convoluteBackward[INPUT, LAYER1, LENGTH_FEATURE0, LENGTH_KERNEL](features.input, errors.input, errors.layer1, lenet.weight0_1, deltas.weight0_1, deltas.bias0_1)
 
-    print("pooling")
-    maxPoolForward[1, image_size, image_size // 2](image, pooled_image)
-    print(pooled_image)
+fn predict(lenet: LeNet5, image: Image) -> Int:
+    var feat = Feature()
+    loadInput(feat, image)
+    forward(lenet, feat)
+    return argMax(feat.output)
 
-    var result = LayoutTensor[mut = True, ftype, Layout.row_major(out_chan,final_size,final_size), MutableAnyOrigin].stack_allocation().fill(0.0)
-    #CONVOLUTION_FORWARD(features->input, features->layer1, lenet->weight0_1, lenet->bias0_1, action);
-    #                         1,5,5           2,4,4              1,2,2,2          2            (RELU)
-    for x in range(kernels.shape[0]()): # number of input channels
-        for y in range(kernels.shape[1]()): # number of output channels
-            for i in range(result.shape[1]()): # each output pixel row
-                for j in range(result.shape[2]()): # each output pixel column
-                    for a in range(kernels.shape[2]()): # for each weight row of a kernel
-                        for b in range(kernels.shape[2]()): # for each weight col of a kernel
-                            result[y, i, j] +=  image[x, i + a, j + b] * kernels[x, y, a, b]
+fn trainBatch(mut lenet: LeNet5, inputs: UnsafePointer[Image], batch_size: Int):
+    print("trainBatch reached")
+    var buffer = LeNet5()
 
-    print("result:::")
-    for i in range(result.shape[0]()):
-        for j in range(result.shape[1]()):
-            for k in range(result.shape[2]()):
-                print(result[i,j,k], end = ", ")
-            print()
-        print("\n")
+    for i in range(batch_size):
+        var feat = Feature()
+        var errors = Feature()
+        var deltas = LeNet5()
+        loadInput(feat, inputs[i])
+        forward(lenet, feat)
+        var the_label = Int(inputs[i].label)
+        loadTarget(feat, errors, the_label)
+        backward(lenet, deltas, errors, feat)
+        buffer.accumulateFromOther(deltas, 1.0)
 
-    convoluteForward[in_chan, out_chan, image_size, kernel_size,
-                     ](kernels, bias, image, result)
-    print("result:::")
-    for i in range(result.shape[0]()):
-        for j in range(result.shape[1]()):
-            for k in range(result.shape[2]()):
-                print(result[i,j,k], end = ", ")
-            print()
-        print("\n")
+    var k: Scalar[ftype] = Scalar[ftype](ALPHA) / batch_size
+    lenet.accumulateFromOther(buffer, k)
 
-    print("size of lenet5:", sizeof[LeNet5]())
 
-    # this dont work LMFAO
-    var test_tl_copy = LayoutTensor[mut = True, ftype, Layout.row_major(in_chan * image_size * image_size), MutableAnyOrigin].stack_allocation()
-    test_tl_copy.copy_from(image)
-    print("test image COPIED")
-    for i in range(image.shape[0]()):
-        for j in range(image.shape[1]()):
-            for k in range(image.shape[2]()):
-                var temp_idx = Int(i * image.shape[1]() * image.shape[2]() + j * image.shape[2]() + k)
-                print(test_tl_copy[temp_idx], end = ", ")
-            print("\n")
-        print("\n\n")
+# TODO: UNUSED 
+fn train(mut lenet: LeNet5, input: Image, label: Int):
+    var feat = Feature()
+    var errors = Feature()
+    var deltas = LeNet5()
+
+    loadInput(feat, input)
+    forward(lenet, feat)
+    loadTarget(feat, errors, label)
+    backward(lenet, deltas, errors, feat)
     
+    lenet.accumulateFromOther(deltas, ALPHA)
 
-    var test_up = UnsafePointer[Scalar[ftype]].alloc(24)
-    for i in range(24):
-        test_up[i] = i
-    var test_up_tensor = LayoutTensor[ftype, Layout.row_major(2,3,4)](test_up)
-    for i in range(2):
-        for j in range(3):
-            for k in range(4):
-                print(test_up_tensor[i,j,k], end = ", ")
-            print()
-        print()
+fn training(mut lenet: LeNet5, data: UnsafePointer[Image], batch_size: Int, total_size: Int):
+    print("Training", total_size, "images with batch size:", batch_size)
+    for i in range(0, total_size - batch_size, batch_size):
+        print("Progress:", i, "/", total_size)
+        trainBatch(lenet, data, batch_size)
 
-    print(test_tl_copy.address_space)
+fn testing(lenet: LeNet5, data: UnsafePointer[Image], total_size: Int) -> Int:
+    var correct = 0
+    for i in range(total_size):
+        var pred = predict(lenet, data[i])
+        var actual = Int(data[i].label)
+        correct += 1 if pred == actual else 0
 
-
-    alias temp_layout = Layout.row_major(1,2,1,2)
-    var temp_tensor = LayoutTensor[mut = True, ftype, temp_layout, MutableAnyOrigin].stack_allocation()
-    var raw_bytes_list: List[Scalar[DType.uint8]] = [0x3f, 0xa0, 0x00, 0x00, 0x40, 0x68, 0x00, 0x00, 0xbf, 0x80, 0x00, 0x00, 0x42, 0x80, 0x00, 0x00] #1.25, 3.625, -1, 64
-    var raw_bytes = InlineArray[Scalar[DType.uint8], 16](fill = 0)
-    for i in range(16):
-        raw_bytes[i] = raw_bytes_list[i]
-    LeNet5.bytesToFType[DType.float32, 16, temp_layout](raw_bytes, temp_tensor)
-    print(temp_tensor)
+    return correct
 
 def main():
-    #print_layout(ImageLayout)
-
+    print("hello...", file = stderr)
     var train_data = UnsafePointer[Image].alloc(COUNT_TRAIN)
     var test_data = UnsafePointer[Image].alloc(COUNT_TEST)
-
-    var temp_count = 2#Int(COUNT_TRAIN / 10000 * 2)
-
+    print("reading data in from files")
     readData(COUNT_TRAIN, "train", train_data)
     readData(COUNT_TEST, "test", test_data)
-    _ = """
-    for i in range(temp_count):
-        var train_image = train_data[i]
-        print("train sample:\n", String(train_image))
-        #print(train_image.toNormalized()[28 * 14])
 
-        var test_image = test_data[i]
-        print("test sample:\n", String(test_image))
-        #print(test_image.toNormalized()[28 * 14])
-    """
+    var lenet = LeNet5()
+    lenet.randomizeWeights()
+    var batch_size = 300 # could do a number of different batch sizes if we wanted
+
+    print("begin training")
+    training(lenet, train_data, batch_size, COUNT_TRAIN)
+
+    var correct = testing(lenet, test_data, COUNT_TEST)
+    print(correct, "/", COUNT_TEST)
+    
+    _ = """
+    var temp_count = 2#Int(COUNT_TRAIN / 10000 * 2)
+
+    print("reading data in from files")
+    readData(COUNT_TRAIN, "train", train_data)
+    readData(COUNT_TEST, "test", test_data)
 
     #####################################
 
     # when it's time to train
     #var model = LeNet5()
     #model.randomizeWeights()
-
+    print("loading model")
     var model = LeNet5.fromFile[DType.float64]("model_f64.dat")
     var feat: Feature
     var correct = 0
-    for c in range(COUNT_TEST):
+    
+    alias test_size = COUNT_TEST #// 100
+    print("testing",  test_size, "images")
+    var start_time = perf_counter_ns()
+
+    for c in range(test_size):
         feat = Feature()
         var img = test_data[c]
-        loadInput(img, feat)
+        loadInput(feat, img)
         forward(model, feat)
         var pred: UInt8 = argMax[feat.output_layout](feat.output)
-        print(pred, end = ", ")
+        #print(pred, end = ", ")
         if pred != img.label:
-            print("\n\tLast Is Incorrect, Actual:")
-            print(String(img))
+            #print("\n\tLast Is Incorrect, Actual:")
+            #print(String(img))
             correct -= 1
         correct += 1
-    print("test results:", correct, "correct out of ", COUNT_TEST, "=", correct / COUNT_TEST * 100, "%")
-    
+    var end_time = perf_counter_ns()
+    var elapsed_ns = end_time - start_time
+    print("test results:", correct, "correct out of ", test_size, "=", correct / test_size * 100, "%")
+    print(elapsed_ns, "ns")
+    """
 
     # for losers
     train_data.free()
     test_data.free()
 
-
-    # tests()
