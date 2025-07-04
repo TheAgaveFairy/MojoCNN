@@ -1,7 +1,7 @@
 from layout import Layout, LayoutTensor, print_layout#, LayoutTensorIter
 from layout.layout_tensor import LayoutTensorIter
 from math import sqrt, exp
-from random import random_float64
+from random import random_float64, seed
 from sys.info import sizeof
 from sys import stderr
 from utils.index import IndexList
@@ -43,7 +43,7 @@ alias PADDING = 2
 
 alias IMAGE_SIZE =      28 # as we read it in from the file, its padded to LENGTH_FEATURE0 (a.k.a. PADDED_SIZE)
 alias PADDED_SIZE = IMAGE_SIZE + 2 * PADDING # 32 x 32 is what we want eventually # this should equal LENGTH_FEATURE0
-alias ftype = DType.float32 # model's float type. pixels are uint8 (bytes), non-negotiable
+alias ftype = DType.float64 # model's float type. pixels are uint8 (bytes), non-negotiable
 
 struct LeNet5(Copyable):
     # WEIGHTS
@@ -109,6 +109,17 @@ struct LeNet5(Copyable):
         self.bias4_5 = other.bias4_5
         self.bias5_6 = other.bias5_6
     
+    fn __del__(owned self):
+        self.weight0_1.ptr.free()
+        self.weight2_3.ptr.free()
+        self.weight4_5.ptr.free()
+        self.weight5_6.ptr.free()
+
+        self.bias0_1.ptr.free()
+        self.bias2_3.ptr.free()
+        self.bias4_5.ptr.free()
+        self.bias5_6.ptr.free()
+
     fn accumulateFromOther(mut self, other: Self, lr: Scalar[ftype]):
         _ = """
         self.weight0_1 += 1.0# lr #other.weight0_1 * lr
@@ -412,6 +423,14 @@ struct Feature():
         var output_storage = UnsafePointer[Scalar[ftype]].alloc(Self.output_layout.size())
         self.output = __type_of(self.output)(output_storage).fill(0.0)
 
+    fn __del__(owned self):
+        self.input.ptr.free()
+        self.layer1.ptr.free()
+        self.layer2.ptr.free()
+        self.layer3.ptr.free()
+        self.layer4.ptr.free()
+        self.layer5.ptr.free()
+        self.output.ptr.free()
 
 struct Image(Stringable, Copyable):
     alias PixelLayout = Layout.row_major(IMAGE_SIZE, IMAGE_SIZE)
@@ -896,7 +915,7 @@ fn trainBatch(mut lenet: LeNet5, inputs: UnsafePointer[Image], batch_size: Int):
     var k: Scalar[ftype] = Scalar[ftype](ALPHA) / batch_size
     lenet.accumulateFromOther(buffer, k)
 
-    print(correct, "correct out of", batch_size)
+    #print(correct, "correct out of", batch_size)
 
 # TODO: UNUSED 
 fn train(mut lenet: LeNet5, input: Image, label: Int):
@@ -912,9 +931,9 @@ fn train(mut lenet: LeNet5, input: Image, label: Int):
     lenet.accumulateFromOther(deltas, ALPHA)
 
 fn training(mut lenet: LeNet5, data: UnsafePointer[Image], batch_size: Int, total_size: Int):
-    print("Training", total_size, "images with batch size:", batch_size)
+    #print("Training", total_size, "images with batch size:", batch_size)
     for i in range(0, total_size, batch_size):
-        print("Progress:", i, "/", total_size)
+        #print("Progress:", i, "/", total_size)
         var copy = lenet.weight2_3
         trainBatch(lenet, data + i, batch_size)
 
@@ -927,7 +946,7 @@ fn testing(lenet: LeNet5, data: UnsafePointer[Image], total_size: Int) -> Int:
 
     return correct
 
-fn shuffleData(data: UnsafePointer[Image], count: Int, seed: Int):
+fn shuffleData(data: UnsafePointer[Image], count: Int, seed: Int = 69):
     if count < 1:
         return
     var rng_state = seed
@@ -941,25 +960,32 @@ fn shuffleData(data: UnsafePointer[Image], count: Int, seed: Int):
         data[j] = temp
 
 def main():
-    print("hello...", file = stderr)
+    #print("hello...", file = stderr)
     var train_data = UnsafePointer[Image].alloc(COUNT_TRAIN)
     var test_data = UnsafePointer[Image].alloc(COUNT_TEST)
-    print("reading data in from files")
-    readData(COUNT_TRAIN, "train", train_data)
-    readData(COUNT_TEST, "test", test_data)
 
-    shuffleData(train_data, COUNT_TRAIN, 420)
-    # 69 = 97.19%
+    alias tests_to_run = 3
+    print(tests_to_run, "tests to run")
+    for i in range(tests_to_run):
+        seed(i) #random
+        #print("reading data in from files")
+        readData(COUNT_TRAIN, "train", train_data)
+        readData(COUNT_TEST, "test", test_data)
 
-    var lenet = LeNet5()
-    lenet.randomizeWeights()
-    var batch_size = 300 # could do a number of different batch sizes if we wanted
+        shuffleData(train_data, COUNT_TRAIN)
+        # float32 69 = 97.19%, 420 = 96.98%, 1337 = 97.12%
+        # float64 1337 = 97.29% 9001 = 97.25% 69 = 97.04
+        # testing f64: 33 97.56
 
-    print("begin training")
-    training(lenet, train_data, batch_size, COUNT_TRAIN)
+        var lenet = LeNet5()
+        lenet.randomizeWeights()
+        var batch_size = 300 # could do a number of different batch sizes if we wanted
 
-    var correct = testing(lenet, test_data, COUNT_TEST)
-    print(correct, "/", COUNT_TEST)
+        #print("begin training")
+        training(lenet, train_data, batch_size, COUNT_TRAIN)
+
+        var correct = testing(lenet, test_data, COUNT_TEST)
+        print("seed:", i, correct, "/", COUNT_TEST)
     
     _ = """
     var temp_count = 2#Int(COUNT_TRAIN / 10000 * 2)
