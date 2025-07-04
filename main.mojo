@@ -931,9 +931,9 @@ fn train(mut lenet: LeNet5, input: Image, label: Int):
     lenet.accumulateFromOther(deltas, ALPHA)
 
 fn training(mut lenet: LeNet5, data: UnsafePointer[Image], batch_size: Int, total_size: Int):
-    #print("Training", total_size, "images with batch size:", batch_size)
+    print("Training")
     for i in range(0, total_size, batch_size):
-        #print("Progress:", i, "/", total_size)
+        showProgress(i, total_size)
         var copy = lenet.weight2_3
         trainBatch(lenet, data + i, batch_size)
 
@@ -958,6 +958,21 @@ fn shuffleData(data: UnsafePointer[Image], count: Int, seed: Int = 69):
         var temp = data[i]
         data[i] = data[j]
         data[j] = temp
+
+fn showProgress(progress: Int, total: Int) -> None:
+    """
+    Not quite working.
+    """
+    alias bar_width = 50
+    var ratio = progress / total
+    var filled = Int(bar_width * ratio)
+    #print(chr(27) + "[2J",end="")
+    print("\r[", end = "")
+    for _ in range(filled):
+        print("=", end = "")
+    for _ in range(filled, bar_width):
+        print(" ", end = "")
+    print("]", round(ratio * 100, 3), "%", end = "")
 
 def main():
     #print("hello...", file = stderr)
