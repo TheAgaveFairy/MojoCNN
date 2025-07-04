@@ -159,23 +159,28 @@ struct LeNet5(Copyable):
                 for k in range(self.weight0_1.shape[2]()):
                     for l in range(self.weight0_1.shape[3]()):
                         self.weight0_1[i,j,k,l] = random_float64(-1.0, 1.0).cast[ftype]()
+                        self.weight0_1[i,j,k,l] *= Scalar[ftype](sqrt(6.0 / (LENGTH_KERNEL_SQ * (INPUT + LAYER1))))
 
         for i in range(self.weight2_3.shape[0]()):
             for j in range(self.weight2_3.shape[1]()):
                 for k in range(self.weight2_3.shape[2]()):
                     for l in range(self.weight2_3.shape[3]()):
                         self.weight2_3[i,j,k,l] = random_float64(-1.0, 1.0).cast[ftype]()
+                        self.weight2_3[i,j,k,l] *= Scalar[ftype](sqrt(6.0 / (LENGTH_KERNEL_SQ * (LAYER2 + LAYER3))))
         
         for i in range(self.weight4_5.shape[0]()):
             for j in range(self.weight4_5.shape[1]()):
                 for k in range(self.weight4_5.shape[2]()):
                     for l in range(self.weight4_5.shape[3]()):
                         self.weight4_5[i,j,k,l] = random_float64(-1.0, 1.0).cast[ftype]()
+                        self.weight4_5[i,j,k,l] *= Scalar[ftype](sqrt(6.0 / (LENGTH_KERNEL_SQ * (LAYER4 + LAYER5))))
 
         for i in range(self.weight5_6.shape[0]()):
             for j in range(self.weight5_6.shape[1]()):
                 self.weight5_6[i,j] = random_float64(-1.0, 1.0).cast[ftype]()
+                self.weight5_6[i,j] *= Scalar[ftype](sqrt(6.0 / (LAYER5 + OUTPUT)))
 
+        _ = """
         for i in range(self.bias0_1.shape[0]()):
             self.bias0_1[i] = random_float64(-1.0, 1.0).cast[ftype]()
         for i in range(self.bias2_3.shape[0]()):
@@ -184,6 +189,7 @@ struct LeNet5(Copyable):
             self.bias4_5[i] = random_float64(-1.0, 1.0).cast[ftype]()
         for i in range(self.bias5_6.shape[0]()):
             self.bias5_6[i] = random_float64(-1.0, 1.0).cast[ftype]()
+        """
 
     @staticmethod
     fn bytesToFType[filetype: DType, num_bytes: Int, layout: Layout]
@@ -434,6 +440,10 @@ struct Image(Stringable, Copyable):
         self.pixels = temp_pixels
         self.label = label
 
+    # (Movable)
+    #fn __moveinit__(out self, owned existing: Self):
+    #    existing.pixels = self.pixels^
+    #    existing.label = self.label^
     #fn __del__(owned self): who the fuck does this and when
     #    self.pixels.free()
 
@@ -549,16 +559,16 @@ fn softMax[count: Int](input: LayoutTensor[ftype, Layout.row_major(count), Mutab
     for i in range(count):
         var res: input.element_type = 0.0
         for j in range(count):
-            print(exp(input[j] - input[i]), end = "; ")
+            #print(input[j], input[i], exp(input[j] - input[i]), end = ";\n")
             res += exp(input[j] - input[i])
         loss[i] = 1.0 / res
         inner -= loss[i] * loss[i]
 
     inner += loss[label]
-    print("i", inner, end = ", ")
+    #print("i", inner, end = ", ")
     for i in range(count):
         var temp = 1 if i == label else 0
-        loss[i] *= ((temp) - loss[i] - inner)
+        loss[i] *= temp - loss[i] - inner
 
 fn loadTarget(features: Feature, errors: Feature, label: Int) -> None:
     softMax(features.output, errors.output, label)
@@ -589,15 +599,13 @@ fn convoluteBackward[in_chan: Int,
             var weight_slice = rebind[LayoutTensor[ftype, Layout.row_major(kernel_size, kernel_size), MutableAnyOrigin]](weight.slice[Slice(0, kernel_size), Slice(0, kernel_size), IndexList[2](2,3)](IndexList[2](x,y))) # check shapes
 
             var outerror_slice = rebind[LayoutTensor[ftype, Layout.row_major(out_feat_size, out_feat_size), MutableAnyOrigin]](outerror.slice[Slice(0, out_feat_size), Slice(0, out_feat_size), IndexList[2](1,2)](IndexList[2](y)))
-            
-            convoluteFull[feat_size, kernel_size](weight_slice, outerror_slice, inerror_slice )
-            
+            convoluteFull(weight_slice, outerror_slice, inerror_slice )
 
     @parameter
     for c in range(in_chan): # each element gets "actiongrad"
         for m in range(feat_size):
             for n in range(feat_size):
-                inerror[c, m, n] = inerror[c, m, n] if inerror[c, m, n] > 0 else 0
+                inerror[c, m, n] *= 1 if input[c, m, n] > 0 else 0
     
     @parameter
     for c in range(out_chan):
@@ -614,7 +622,7 @@ fn convoluteBackward[in_chan: Int,
 
             var outerror_slice = rebind[LayoutTensor[ftype, Layout.row_major(out_feat_size, out_feat_size), MutableAnyOrigin]](outerror.slice[Slice(0, out_feat_size), Slice(0, out_feat_size), IndexList[2](1,2)](IndexList[2](y)))
             
-            convoluteValid[feat_size, kernel_size](wdeltas_slice, input_slice, outerror_slice)
+            convoluteValid(outerror_slice, input_slice, wdeltas_slice) # input output weight
 
 
 # CONVOLUTE_VALID(input,output,weight) became (weight, input, output)
@@ -631,18 +639,19 @@ fn convoluteValid[feat_size: Int,
                 for b in range(kernel.shape[1]()): # for each weight col of a kernel
                     result[i, j] +=  image[i + a, j + b] * kernel[a, b]
 
-# CONVOLUTE_FULL(input,output,weight)	                   
+# CONVOLUTE_FULL(input,output,weight)	why did i reorder to weight, in, out
 fn convoluteFull[feat_size: Int,
                      kernel_size: Int,
                      ](
-                        kernel: LayoutTensor[mut = True, ftype, Layout.row_major(kernel_size, kernel_size), MutableAnyOrigin],
-                        image: LayoutTensor[mut = True, ftype, Layout.row_major(feat_size - kernel_size + 1, feat_size - kernel_size + 1), MutableAnyOrigin],
-                        result: LayoutTensor[mut = True, ftype, Layout.row_major(feat_size, feat_size), MutableAnyOrigin]
+                        kernel: LayoutTensor[ftype, Layout.row_major(kernel_size, kernel_size), MutableAnyOrigin],
+                        image: LayoutTensor[ftype, Layout.row_major(feat_size - kernel_size + 1, feat_size - kernel_size + 1), MutableAnyOrigin],
+                        result: LayoutTensor[ftype, Layout.row_major(feat_size, feat_size), MutableAnyOrigin]
                      ) -> None:
     for i in range(image.shape[0]()): # each input pixel row
         for j in range(image.shape[1]()): # each input pixel column
             for a in range(kernel.shape[0]()): # for each weight row of a kernel
                 for b in range(kernel.shape[1]()): # for each weight col of a kernel
+                    #print(image[i, j] * kernel[a, b], end = ",, ")
                     result[i + a, j + b] +=  image[i, j] * kernel[a, b]
 
 fn convoluteForward[in_chan: Int,
@@ -708,7 +717,7 @@ fn maxPoolBackward[num_channels: Int,
                     for l1 in range(len1):
                         ismax = 1 if input[i, o0 * len0 + l0, o1 * len1 + l1] > input[i, o0 * len0 + x0, o1 * len1 + x1] else 0
                         x0 += ismax * (l0 - x0)
-                        x1 += ismax * (x1 - x1)
+                        x1 += ismax * (l1 - x1)
 
                 inerror[i, o0 * len0 + x0, o1 * len1 + x1] = outerror[i, o0, o1]
 
@@ -759,28 +768,30 @@ fn matmulBackward[num_chan: Int,
                         wdeltas: LayoutTensor[mut = True, ftype, Layout.row_major(num_chan * feat_size * feat_size, output_size)],
                         bdeltas: LayoutTensor[mut = True, ftype, Layout.row_major(output_size)]
                      ) -> None:
+
+    alias total_feats = feat_size * feat_size
     for x in range(weight.shape[0]()):
         for y in range(output_size):
-            var ie_i = x // weight.shape[0]()
-            var rem = x % weight.shape[0]()
-            var ie_j = rem // weight.shape[1]()
-            var ie_k = rem % weight.shape[1]()
+            var ie_i = x // (total_feats)
+            var rem = x % total_feats
+            var ie_j = rem // feat_size
+            var ie_k = rem % feat_size
             inerror[ie_i, ie_j, ie_k] += outerror[y] * weight[x, y]
 
     for i in range(num_chan):
         for j in range(feat_size):
             for k in range(feat_size):
-                inerror[i, j, k] = inerror[i, j, k] if input[i, j, k] > 0 else 0
+                inerror[i, j, k] *= 1 if input[i, j, k] > 0 else 0
 
     for i in range(output_size):
         bdeltas[i] += outerror[i]
 
     for x in range(weight.shape[0]()):
         for y in range(weight.shape[1]()):
-            var ie_i = x // weight.shape[0]()
-            var rem = x % weight.shape[0]()
-            var ie_j = rem // weight.shape[1]()
-            var ie_k = rem % weight.shape[1]()
+            var ie_i = x // (total_feats) # num_chan
+            var rem = x % total_feats
+            var ie_j = rem // feat_size # feat_size
+            var ie_k = rem % feat_size # feat_size
             wdeltas[x, y] += input[ie_i, ie_j, ie_k] * outerror[y]
 
 # 	DOT_PRODUCT_FORWARD(features->layer5, features->output, lenet->weight5_6, lenet->bias5_6, action);
@@ -811,33 +822,42 @@ fn loadInput(features: Feature, image: Image):
             features.input[0, i, j] = normed[i, j]
 
 fn forward(lenet: LeNet5, features: Feature):
-    convoluteForward[INPUT, LAYER1, LENGTH_FEATURE0, LENGTH_KERNEL](
-            lenet.weight0_1, lenet.bias0_1, features.input, features.layer1)
-    
-    maxPoolForward[LAYER1, LENGTH_FEATURE1, LENGTH_FEATURE2](features.layer1, features.layer2)
+    convoluteForward(lenet.weight0_1, lenet.bias0_1, features.input, features.layer1)
+    # input, l1, lf0, lk
 
-    convoluteForward[LAYER2, LAYER3, LENGTH_FEATURE2, LENGTH_KERNEL](
-            lenet.weight2_3, lenet.bias2_3, features.layer2, features.layer3)
-    
-    maxPoolForward[LAYER3, LENGTH_FEATURE3, LENGTH_FEATURE4](features.layer3, features.layer4)
+    maxPoolForward(features.layer1, features.layer2)
+    # l1 lf1 lf2
 
-    convoluteForward[LAYER4, LAYER5, LENGTH_FEATURE4, LENGTH_KERNEL](
-            lenet.weight4_5, lenet.bias4_5, features.layer4, features.layer5)
+    convoluteForward(lenet.weight2_3, lenet.bias2_3, features.layer2, features.layer3)
+    #l2 l3 lf2 lk
 
-    matmulForward[LAYER5, LENGTH_FEATURE5, OUTPUT](features.layer5, features.output, lenet.weight5_6, lenet.bias5_6)
+    maxPoolForward(features.layer3, features.layer4)
+    # l3 lf3 lf4
+
+    convoluteForward(lenet.weight4_5, lenet.bias4_5, features.layer4, features.layer5)
+    #l4 l5 lf4 lk
+
+    matmulForward(features.layer5, features.output, lenet.weight5_6, lenet.bias5_6)
+    #LAYER5, LEA_f5, output
 
 fn backward(lenet: LeNet5, deltas: LeNet5, errors: Feature, features: Feature) -> None:
-    matmulBackward[LAYER5, LENGTH_FEATURE5, OUTPUT](features.layer5, errors.layer5, errors.output, lenet.weight5_6, deltas.weight5_6, deltas.bias5_6)
-                      
-    convoluteBackward[LAYER4, LAYER5, LENGTH_FEATURE4, LENGTH_KERNEL](features.layer4, errors.layer4, errors.layer5, lenet.weight4_5, deltas.weight4_5, deltas.bias4_5)
+    matmulBackward(features.layer5, errors.layer5, errors.output, lenet.weight5_6, deltas.weight5_6, deltas.bias5_6)
+    #l5, lf5, output
 
-    maxPoolBackward[LAYER3, LENGTH_FEATURE3, LENGTH_FEATURE4](features.layer3, errors.layer3, errors.layer4)
+    convoluteBackward(features.layer4, errors.layer4, errors.layer5, lenet.weight4_5, deltas.weight4_5, deltas.bias4_5)
+    #l4 l5 lf4 lk
 
-    convoluteBackward[LAYER2, LAYER3, LENGTH_FEATURE2, LENGTH_KERNEL](features.layer2, errors.layer2, errors.layer3, lenet.weight2_3, deltas.weight2_3, deltas.bias2_3)
+    maxPoolBackward(features.layer3, errors.layer3, errors.layer4)
+    #l3 lf3 lf4
 
-    maxPoolBackward[LAYER1, LENGTH_FEATURE1, LENGTH_FEATURE2](features.layer1, errors.layer1, errors.layer2)
+    convoluteBackward(features.layer2, errors.layer2, errors.layer3, lenet.weight2_3, deltas.weight2_3, deltas.bias2_3)
+    #l2 l3 lf2 lk
 
-    convoluteBackward[INPUT, LAYER1, LENGTH_FEATURE0, LENGTH_KERNEL](features.input, errors.input, errors.layer1, lenet.weight0_1, deltas.weight0_1, deltas.bias0_1)
+    maxPoolBackward(features.layer1, errors.layer1, errors.layer2)
+    #l1 lf1 lf2
+
+    convoluteBackward(features.input, errors.input, errors.layer1, lenet.weight0_1, deltas.weight0_1, deltas.bias0_1)
+    #input l1 lf0 lk
 
 fn predict(lenet: LeNet5, image: Image) -> Int:
     var feat = Feature()
@@ -859,8 +879,9 @@ fn trainBatch(mut lenet: LeNet5, inputs: UnsafePointer[Image], batch_size: Int):
         var the_label = Int(inputs[i].label)
         if pred == the_label:
             correct += 1
+        #print("feat.output", feat.output, "->", pred, "==", the_label)
         loadTarget(feat, errors, the_label)
-        print(errors.output)
+        #print(errors.output)
         backward(lenet, deltas, errors, feat)
         #var copy = buffer.weight2_3
         buffer.accumulateFromOther(deltas, 1.0)
@@ -906,6 +927,19 @@ fn testing(lenet: LeNet5, data: UnsafePointer[Image], total_size: Int) -> Int:
 
     return correct
 
+fn shuffleData(data: UnsafePointer[Image], count: Int, seed: Int):
+    if count < 1:
+        return
+    var rng_state = seed
+    #some Claude 4 shit
+    for i in range(count - 1, 0, -1):
+        rng_state = (rng_state * 1664525 + 1013904223) % 2147483647
+        var j = Int(rng_state) % (i + 1)
+
+        var temp = data[i]
+        data[i] = data[j]
+        data[j] = temp
+
 def main():
     print("hello...", file = stderr)
     var train_data = UnsafePointer[Image].alloc(COUNT_TRAIN)
@@ -913,6 +947,9 @@ def main():
     print("reading data in from files")
     readData(COUNT_TRAIN, "train", train_data)
     readData(COUNT_TEST, "test", test_data)
+
+    shuffleData(train_data, COUNT_TRAIN, 420)
+    # 69 = 97.19%
 
     var lenet = LeNet5()
     lenet.randomizeWeights()
@@ -927,21 +964,12 @@ def main():
     _ = """
     var temp_count = 2#Int(COUNT_TRAIN / 10000 * 2)
 
-    print("reading data in from files")
-    readData(COUNT_TRAIN, "train", train_data)
-    readData(COUNT_TEST, "test", test_data)
-
-    #####################################
-
-    # when it's time to train
-    #var model = LeNet5()
-    #model.randomizeWeights()
-    print("loading model")
+    print("loading a saved model")
     var model = LeNet5.fromFile[DType.float64]("model_f64.dat")
     var feat: Feature
-    var correct = 0
+    correct = 0
     
-    alias test_size = COUNT_TEST #// 100
+    alias test_size = COUNT_TEST // 100
     print("testing",  test_size, "images")
     var start_time = perf_counter_ns()
 
@@ -950,7 +978,8 @@ def main():
         var img = test_data[c]
         loadInput(feat, img)
         forward(model, feat)
-        var pred: UInt8 = argMax[feat.output_layout](feat.output)
+        var pred: UInt8 = argMax(feat.output) #[feat.output_layout]
+        #print(feat.output)
         #print(pred, end = ", ")
         if pred != img.label:
             #print("\n\tLast Is Incorrect, Actual:")
@@ -961,7 +990,7 @@ def main():
     var elapsed_ns = end_time - start_time
     print("test results:", correct, "correct out of ", test_size, "=", correct / test_size * 100, "%")
     print(elapsed_ns, "ns")
-    """
+    #"""
 
     # for losers
     train_data.free()

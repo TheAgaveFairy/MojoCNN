@@ -7,9 +7,16 @@ from utils.index import IndexList
 #import simd
 from time import perf_counter_ns
 
-def main():
-    alias ftype = DType.float32
+alias ftype = DType.float32
 
+fn editSlice[dim0: Int, dim1: Int](data: LayoutTensor[ftype, Layout.row_major(dim0, dim1), MutableAnyOrigin]):
+    for i in range(dim0):
+        for j in range(dim1):
+            data[i, j] += 100
+
+def main():
+
+    _ = """
     var test_up = UnsafePointer[Scalar[ftype]].alloc(24)
     for i in range(24):
         test_up[i] = i
@@ -23,7 +30,7 @@ def main():
 
     print(test_up_tensor.layout, "\n\n")
 
-    _ = """
+    
     print("test_up.slice[s(0,3) s(0,4) il[2](0,3)](0)\n",test_up_tensor.slice[Slice(0,3), Slice(0,4), IndexList[2](0,3)](0))
     print()
 
@@ -42,13 +49,13 @@ def main():
     for i in range(5):
         print("test_up.slice[s(0,3) s(0,4) il[2](0,1,2,3,4)](i)\n",test_up_tensor.slice[Slice(0,3), Slice(0,4), IndexList[2](0,1,2,3,4)](i))
         print()
-    """
+    
     print("test_up.slice[s(0,3) s(0,4) il[2](1,2)](0)\n",test_up_tensor.slice[Slice(0,3), Slice(0,4), IndexList[2](1,2)](0))
     print()
 
     print("test_up.slice[s(0,3) s(0,4) il[2](1,2)](1)\n",test_up_tensor.slice[Slice(0,3), Slice(0,4), IndexList[2](1,2)](1))
     print()
-    
+    """
 
     print("TEST KERNELS")
     var kernels_storage = UnsafePointer[Scalar[ftype]].alloc(48)
@@ -77,12 +84,38 @@ def main():
             print("in_chan, out_chan", in_chan, out_chan)
             print(kernels.slice[Slice(0,3), Slice(0,4), IndexList[2](2,3)](IndexList[2](in_chan, out_chan)))
 
+
+    var test_slice = rebind[LayoutTensor[ftype, Layout.row_major(3, 4), MutableAnyOrigin]](kernels.slice[Slice(0, 3), Slice(0, 4), IndexList[2](2,3)](IndexList[2](0,1)))
+    print("new test slice\n", test_slice)
+
+    editSlice(test_slice)
+
+    print("modded slice\n", test_slice)
+    print("original\n", kernels)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"""
 def tests():
     alias in_chan = 1
     alias out_chan = 2
     alias image_size = 6
     alias kernel_size = 3
     alias final_size = image_size - kernel_size + 1
+    alias ftype = DType.float32
 
     print("test kernel")
     var kernels = LayoutTensor[mut = True, ftype, Layout.row_major(in_chan, out_chan, kernel_size, kernel_size), MutableAnyOrigin].stack_allocation()
@@ -190,4 +223,4 @@ def tests():
     
     print("kernels.slice[(0,ks)(0,ks)[2](0,ks)](0)\n",kernels.slice[Slice(0,kernel_size), Slice(0,kernel_size), IndexList[2](0,kernel_size)](0)) 
     print("kernels.slice[(0,ks)(0,ks)[2](0,ks)](1)\n",kernels.slice[Slice(0,kernel_size), Slice(0,kernel_size), IndexList[2](0,kernel_size)](1)) 
-
+"""
