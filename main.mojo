@@ -110,18 +110,50 @@ struct LeNet5(Copyable):
         self.bias5_6 = other.bias5_6
     
     fn accumulateFromOther(mut self, other: Self, lr: Scalar[ftype]):
-        self.weight0_1 += other.weight0_1 * lr
-        self.weight2_3 += other.weight2_3 * lr 
-        self.weight4_5 += other.weight4_5 * lr
-        self.weight5_6 += other.weight5_6 * lr
+        _ = """
+        self.weight0_1 += 1.0# lr #other.weight0_1 * lr
+        self.weight2_3 += 1.0 # lr #other.weight2_3 * lr 
+        self.weight4_5 += 1.0 #other.weight4_5 * lr
+        self.weight5_6 += 1.0 #other.weight5_6 * lr
 
-        self.bias0_1 += other.bias0_1 * lr
-        self.bias2_3 += other.bias2_3 * lr 
-        self.bias4_5 += other.bias4_5 * lr 
-        self.bias5_6 += other.bias5_6 * lr
+        self.bias0_1 += 1.0 #other.bias0_1 * lr
+        self.bias2_3 += 1.0 #other.bias2_3 * lr 
+        self.bias4_5 += 1.0 #other.bias4_5 * lr 
+        self.bias5_6 += 1.0 #other.bias5_6 * lr
+        """
+        for i in range(self.weight0_1.shape[0]()):
+            for j in range(self.weight0_1.shape[1]()):
+                for k in range(self.weight0_1.shape[2]()):
+                    for l in range(self.weight0_1.shape[3]()):
+                        #print(other.weight0_1[i,j,k,l], lr, end = ", ")
+                        self.weight0_1[i,j,k,l] += other.weight0_1[i,j,k,l] * lr
+
+        for i in range(self.weight2_3.shape[0]()):
+            for j in range(self.weight2_3.shape[1]()):
+                for k in range(self.weight2_3.shape[2]()):
+                    for l in range(self.weight2_3.shape[3]()):
+                        self.weight2_3[i,j,k,l] += other.weight2_3[i,j,k,l] * lr
+        
+        for i in range(self.weight4_5.shape[0]()):
+            for j in range(self.weight4_5.shape[1]()):
+                for k in range(self.weight4_5.shape[2]()):
+                    for l in range(self.weight4_5.shape[3]()):
+                        self.weight4_5[i,j,k,l] += other.weight4_5[i,j,k,l] * lr
+
+        for i in range(self.weight5_6.shape[0]()):
+            for j in range(self.weight5_6.shape[1]()):
+                self.weight5_6[i,j] += other.weight5_6[i,j] * lr
+
+        for i in range(self.bias0_1.shape[0]()):
+            self.bias0_1[i] += other.bias0_1[i] * lr
+        for i in range(self.bias2_3.shape[0]()):
+            self.bias2_3[i] += other.bias2_3[i] * lr
+        for i in range(self.bias4_5.shape[0]()):
+            self.bias4_5[i] += other.bias4_5[i] * lr
+        for i in range(self.bias5_6.shape[0]()):
+            self.bias5_6[i] += other.bias5_6[i] * lr
 
     fn randomizeWeights(self):
-        #var iter = LayoutTensorIter[ftype, Layout.row_major(1024)](self.weight0_1)
         for i in range(self.weight0_1.shape[0]()):
             for j in range(self.weight0_1.shape[1]()):
                 for k in range(self.weight0_1.shape[2]()):
@@ -513,22 +545,23 @@ fn argMax[layout: Layout](output: LayoutTensor[mut = True, ftype, layout, Mutabl
     return pos
 
 fn softMax[count: Int](input: LayoutTensor[ftype, Layout.row_major(count), MutableAnyOrigin], loss: LayoutTensor[ftype, Layout.row_major(count), MutableAnyOrigin], label: Int) -> None:
-    var inner: loss.element_type = 0
-    @parameter
+    var inner: loss.element_type = 0.0
     for i in range(count):
-        var res: input.element_type = 0
+        var res: input.element_type = 0.0
         for j in range(count):
+            print(exp(input[j] - input[i]), end = "; ")
             res += exp(input[j] - input[i])
-        loss[i] = 1 / res
+        loss[i] = 1.0 / res
         inner -= loss[i] * loss[i]
 
     inner += loss[label]
+    print("i", inner, end = ", ")
     for i in range(count):
         var temp = 1 if i == label else 0
-        loss[i] *= temp - loss[i] - inner
+        loss[i] *= ((temp) - loss[i] - inner)
 
 fn loadTarget(features: Feature, errors: Feature, label: Int) -> None:
-    softMax[OUTPUT](features.output, errors.output, label)
+    softMax(features.output, errors.output, label)
 
 #define CONVOLUTION_BACKWARD(input,inerror,outerror,weight,wd,bd,actiongrad)
 #CONVOLUTION_BACKWARD(features->layer4, errors->layer4, errors->layer5, lenet->weight4_5, deltas->weight4_5, deltas->bias4_5, actiongrad);
@@ -750,8 +783,6 @@ fn matmulBackward[num_chan: Int,
             var ie_k = rem % weight.shape[1]()
             wdeltas[x, y] += input[ie_i, ie_j, ie_k] * outerror[y]
 
-
-
 # 	DOT_PRODUCT_FORWARD(features->layer5, features->output, lenet->weight5_6, lenet->bias5_6, action);
 fn matmulForward[num_chan: Int,
                      feat_size: Int,
@@ -815,8 +846,8 @@ fn predict(lenet: LeNet5, image: Image) -> Int:
     return argMax(feat.output)
 
 fn trainBatch(mut lenet: LeNet5, inputs: UnsafePointer[Image], batch_size: Int):
-    print("trainBatch reached")
     var buffer = LeNet5()
+    var correct = 0
 
     for i in range(batch_size):
         var feat = Feature()
@@ -824,14 +855,27 @@ fn trainBatch(mut lenet: LeNet5, inputs: UnsafePointer[Image], batch_size: Int):
         var deltas = LeNet5()
         loadInput(feat, inputs[i])
         forward(lenet, feat)
+        var pred = argMax(feat.output)
         var the_label = Int(inputs[i].label)
+        if pred == the_label:
+            correct += 1
         loadTarget(feat, errors, the_label)
+        print(errors.output)
         backward(lenet, deltas, errors, feat)
+        #var copy = buffer.weight2_3
         buffer.accumulateFromOther(deltas, 1.0)
-
+        _ = """
+        for i in range(LAYER2):
+            for j in range(LAYER3):
+                for k in range(LENGTH_KERNEL):
+                    for l in range(LENGTH_KERNEL):
+                        if copy[i,j,k,l] != buffer.weight2_3[i,j,k,l]:
+                            print("GOOD")
+        """
     var k: Scalar[ftype] = Scalar[ftype](ALPHA) / batch_size
     lenet.accumulateFromOther(buffer, k)
 
+    print(correct, "correct out of", batch_size)
 
 # TODO: UNUSED 
 fn train(mut lenet: LeNet5, input: Image, label: Int):
@@ -848,9 +892,10 @@ fn train(mut lenet: LeNet5, input: Image, label: Int):
 
 fn training(mut lenet: LeNet5, data: UnsafePointer[Image], batch_size: Int, total_size: Int):
     print("Training", total_size, "images with batch size:", batch_size)
-    for i in range(0, total_size - batch_size, batch_size):
+    for i in range(0, total_size, batch_size):
         print("Progress:", i, "/", total_size)
-        trainBatch(lenet, data, batch_size)
+        var copy = lenet.weight2_3
+        trainBatch(lenet, data + i, batch_size)
 
 fn testing(lenet: LeNet5, data: UnsafePointer[Image], total_size: Int) -> Int:
     var correct = 0
