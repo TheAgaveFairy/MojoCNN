@@ -1006,7 +1006,7 @@ def main():
     var train_data = UnsafePointer[Image].alloc(COUNT_TRAIN)
     var test_data = UnsafePointer[Image].alloc(COUNT_TEST)
 
-    alias tests_to_run = 3
+    alias tests_to_run = 1
     print(tests_to_run, "tests to run")
     for i in range(tests_to_run):
         seed(i) #random
@@ -1022,7 +1022,7 @@ def main():
         training(lenet, train_data, batch_size, COUNT_TRAIN)
 
         var correct = testing(lenet, test_data, COUNT_TEST)
-        print("seed:", i, correct, "/", COUNT_TEST)
+        print("\nseed:", i, correct, "/", COUNT_TEST)
     
     # TESTING A PRETRAINED VERSION FROM FILE
     _ = """
