@@ -47,12 +47,14 @@ fn convoluteValidGPU[
         var result: output.element_type = 0
 
         # KERNEL_SIZE dims
+        @parameter
         for i in range(kernel_size):
+            @parameter
             for j in range(kernel_size):
                 var in_row = gy + i
                 var in_col = gx + j
 
-                result += img[in_row, in_col] * kernel[i, j]
+                result += img[in_row, in_col] * local_kernel[i, j]
 
         output[gy, gx] = result
 
