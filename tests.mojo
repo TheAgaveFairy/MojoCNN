@@ -58,20 +58,100 @@ fn convoluteValidGPU[
 
         output[gy, gx] = result
 
-def main():
-    print("TEST KERNELS")
+fn convoluteFullGPU[
+        layout: Layout, kernel_layout: Layout
+        ](
+        output: LayoutTensor[mut = True, itype, layout],
+        input: LayoutTensor[mut = False, itype, layout],
+        kernel: LayoutTensor[mut = False, itype, kernel_layout]
+        ) -> None:
+
+    var row = block_dim.y * block_idx.y + thread_idx.y
+    var col = block_dim.x * block_idx.x + thread_idx.x
     
-    #var ctx = DeviceContext()
+    alias img_size = input.shape[0]() # one dim (i.e. 4x4 image = 4)
+    alias kernel_size = kernel.shape[0]()
+    alias half = kernel_size // 2
+
+    var local_kernel = LayoutTensorBuild[itype]().row_major[kernel_size, kernel_size]().shared().alloc()
+
+    if col < kernel_size and row < kernel_size:
+        local_kernel[row, col] = kernel[row, col]
+
+    if row < img_size and col < img_size:
+        var result: output.element_type = 0
+
+        @parameter
+        for i in range(-half, half + 1):
+            @parameter
+            for j in range(-half, half + 1):
+                var in_row = row + i
+                var in_col = col + j
+
+                if in_row >= 0 and in_col >= 0 and in_row < img_size and in_col < img_size:
+                    result += input[in_row, in_col] * local_kernel[i + 1, j + 1]
+
+        output[row, col] = result
+
+fn matmulGPU[m: Int, l: Int, n: Int](
+        a: LayoutTensor[mut = False, itype, Layout.row_major(m,l), MutableAnyOrigin],
+        b: LayoutTensor[mut = False, itype, Layout.row_major(l,n), MutableAnyOrigin],
+        c: LayoutTensor[mut = True,  itype, Layout.row_major(m,n), MutableAnyOrigin]
+        ) -> None:
+    var row = block_dim.y * block_idx.y + thread_idx.y
+    var col = block_dim.x * block_idx.x + thread_idx.x
+
+    if row < m and col < n:
+        var temp: c.element_type = 0
+        for k in range(l):
+            temp += a[row, k] * b[k, col]
+        c[row, col] = temp
+
+fn tensorAddGPU[layout: Layout](
+        a: LayoutTensor[mut = False, itype, layout, MutableAnyOrigin],
+        b: LayoutTensor[mut = False, itype, layout, MutableAnyOrigin],
+        c: LayoutTensor[mut = True,  itype, layout, MutableAnyOrigin]
+        ) -> None:
+    alias rows = a.shape[0]()
+    alias cols = a.shape[1]()
+    alias col = block_dim.x * block_idx.x + thread_idx.x
+    alias row = block_dim.y * block_idx.y + thread_idx.y
+
+    if col < cols and row < rows:
+        c[row, col] = a[row, col] + b[row, col]
+
+fn maxPoolForwardGPU[in_layout: Layout, out_layout: Layout](
+        input: LayoutTensor[mut = False, itype, in_layout, MutableAnyOrigin],
+        output: LayoutTensor[mut = True, itype, out_layout, MutableAnyOrigin]) -> None:
+    
+    alias rows = input.shape[0]() // 2
+    alias cols = input.shape[1]() // 2
+    var col = block_dim.x * block_idx.x + thread_idx.x
+    var row = block_dim.y * block_idx.y + thread_idx.y
+    
+    if row < rows and col < cols:
+        var tr = row * 2
+        var tc = col * 2
+
+        var temp: output.element_type = max(input[tr, tc], input[tr, tc + 1])
+        temp = max(temp, input[tr + 1, tc])
+        temp = max(temp, input[tr + 1, tc + 1])
+        
+        output[row, col] = temp
+
+def main():
+    
     # https://www.youtube.com/watch?v=0urE4l4XV98
 
     alias kernel_size = 3
     alias kernels_layout = Layout.row_major(2,2,kernel_size,kernel_size)
     
     var kernels_storage = UnsafePointer[Scalar[itype]].alloc(48)
-    randint[itype](kernels_storage, kernels_layout.size(), -5, 5)
+    randint[itype](kernels_storage, kernels_layout.size(), -1, 1)
 
     var kernels = LayoutTensor[mut = True, itype, kernels_layout](kernels_storage)
 
+    print("TEST KERNELS")
     for in_chan in range(kernels.shape[0]()):
         for out_chan in range(kernels.shape[1]()):
             print("in_chan, out_chan", in_chan, out_chan)
@@ -93,11 +173,13 @@ def main():
     memset_zero(res_storage, result_layout.size())
     var output = LayoutTensor[mut = True, itype, result_layout](res_storage)
 
-    #convoluteValidGPU(o i k)
     with DeviceContext() as ctx:
         out = ctx.enqueue_create_buffer[itype](result_layout.size()).enqueue_fill(0)
         input = ctx.enqueue_create_buffer[itype](img_layout.size()).enqueue_fill(0)
+        out_full_buff = ctx.enqueue_create_buffer[itype](img_layout.size()).enqueue_fill(0)
         kern = ctx.enqueue_create_buffer[itype](test_kernel.size()).enqueue_fill(0)
+        c_dev = ctx.enqueue_create_buffer[itype](test_kernel.size()).enqueue_fill(0)
+        dev_ptr_mp = ctx.enqueue_create_buffer[itype](test_kernel.size()).enqueue_fill(0)
 
         with input.map_to_host() as inp:
             for i in range(img_layout.size()):
@@ -110,25 +192,66 @@ def main():
         alias BLOCKS_PER_GRID = (1, 1)
         alias THREADS_PER_BLOCK = (out_size, out_size)
         
-        dev_out = __type_of(output)(out.unsafe_ptr())
-        dev_img = __type_of(img)(input.unsafe_ptr())
-        dev_kern = __type_of(test_kernel)(kern.unsafe_ptr())
+        dev_out = __type_of(output)(out.unsafe_ptr()) # valid conv output
+        dev_out_full = __type_of(img)(out_full_buff.unsafe_ptr()) # full conv output
+        dev_img = __type_of(img)(input.unsafe_ptr()) # some test image input
+        dev_kern = __type_of(test_kernel)(kern.unsafe_ptr()) # a test kernel
+        dev_c = __type_of(test_kernel)(c_dev.unsafe_ptr()) # matmul result
+        dev_mp = __type_of(test_kernel)(dev_ptr_mp.unsafe_ptr()) # maxpool result
         
+        # VALID
         ctx.enqueue_function[convoluteValidGPU[result_layout, img_layout, test_kernel.layout]](
                 dev_out, dev_img, dev_kern,
                 grid_dim = BLOCKS_PER_GRID, block_dim = THREADS_PER_BLOCK)
-
         ctx.synchronize()
-        print("Result:")
+        print("Result Valid:")
         with out.map_to_host() as rs:
             for i in range(out_size):
                 for j in range(out_size):
                     print(rs[i * out_size + j], end = ", ")
                 print()
 
+        # FULL
+        ctx.enqueue_function[convoluteFullGPU[img_layout, test_kernel.layout]](
+                dev_out_full, dev_img, dev_kern,
+                grid_dim = BLOCKS_PER_GRID, block_dim = (img_size, img_size))
+        ctx.synchronize()
+        print("Result Full:")
+        with out_full_buff.map_to_host() as rs:
+            for i in range(img_size):
+                for j in range(img_size):
+                    print(rs[i * img_size + j], end = ", ")
+                print()
+
+        # MATMUL
+        alias mln = kernel_size
+        ctx.enqueue_function[matmulGPU[mln, mln, mln]](
+                dev_kern, dev_kern, dev_c,
+                grid_dim = BLOCKS_PER_GRID, block_dim = (kernel_size, kernel_size))
+        ctx.synchronize()
+        print("Result Matmul:")
+        with c_dev.map_to_host() as rs:
+            for i in range(kernel_size):
+                for j in range(kernel_size):
+                    print(rs[i * kernel_size + j], end = ", ")
+                print()
+
+        # MAXPOOL
+        ctx.enqueue_function[maxPoolForwardGPU[img_layout, test_kernel.layout]](
+                dev_img, dev_mp,
+                grid_dim = BLOCKS_PER_GRID, block_dim = (kernel_size, kernel_size))
+        ctx.synchronize()
+        print("Result Maxpool of Img:")
+        with dev_ptr_mp.map_to_host() as rs:
+            for i in range(kernel_size):
+                for j in range(kernel_size):
+                    print(rs[i * kernel_size + j], end = ", ")
+                print()
+
     # for the losers out there who don't trust their OS
     kernels.ptr.free()
     img.ptr.free()
+    # etc LOL
 
 fn testBytesToFloat():
     alias temp_layout = Layout.row_major(1,2,1,2)
