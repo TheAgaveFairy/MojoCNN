@@ -7,7 +7,6 @@ from utils.index import IndexList
 #import simd
 from time import perf_counter_ns
 
-
 from gpu import thread_idx, block_idx, block_dim, barrier
 from gpu.host import DeviceContext
 from memory import stack_allocation, memset_zero
