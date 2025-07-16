@@ -107,6 +107,10 @@ fn matmulGPU[m: Int, l: Int, n: Int](
             temp += a[row, k] * b[k, col]
         c[row, col] = temp
 
+#fn tester(x: Scalar[itype]) -> Scalar[itype]:
+#    return x + 100
+
+#fn tensorAddGPU[layout: Layout, test_fn: fn(Int) -> Int](
 fn tensorAddGPU[layout: Layout](
         a: LayoutTensor[mut = False, itype, layout, MutableAnyOrigin],
         b: LayoutTensor[mut = False, itype, layout, MutableAnyOrigin],
@@ -119,6 +123,8 @@ fn tensorAddGPU[layout: Layout](
 
     if col < cols and row < rows:
         c[row, col] = a[row, col] + b[row, col]
+        #var temp = Int(c[row, col])
+        #c[row, col] = test_fn(temp)
 
 fn maxPoolForwardGPU[in_layout: Layout, out_layout: Layout](
         input: LayoutTensor[mut = False, itype, in_layout, MutableAnyOrigin],
@@ -224,17 +230,18 @@ def main():
                 print()
 
         # MATMUL
-        alias mln = kernel_size
-        ctx.enqueue_function[matmulGPU[mln, mln, mln]](
-                dev_kern, dev_kern, dev_c,
-                grid_dim = BLOCKS_PER_GRID, block_dim = (kernel_size, kernel_size))
-        ctx.synchronize()
-        print("Result Matmul:")
-        with c_dev.map_to_host() as rs:
-            for i in range(kernel_size):
-                for j in range(kernel_size):
-                    print(rs[i * kernel_size + j], end = ", ")
-                print()
+        for _ in range(1):
+            alias mln = kernel_size
+            ctx.enqueue_function[matmulGPU[mln, mln, mln]](
+                    dev_kern, dev_kern, dev_c,
+                    grid_dim = BLOCKS_PER_GRID, block_dim = (kernel_size, kernel_size))
+            ctx.synchronize()
+            print("Result Matmul:")
+            with c_dev.map_to_host() as rs:
+                for i in range(kernel_size):
+                    for j in range(kernel_size):
+                        print(rs[i * kernel_size + j], end = ", ")
+                    print()
 
         # MAXPOOL
         ctx.enqueue_function[maxPoolForwardGPU[img_layout, test_kernel.layout]](
@@ -253,14 +260,28 @@ def main():
     img.ptr.free()
     # etc LOL
 
+    testBytesToFloat()
+
 fn testBytesToFloat():
-    alias temp_layout = Layout.row_major(1,2,1,2)
-    var temp_tensor = LayoutTensor[mut = True, ftype, temp_layout, MutableAnyOrigin].stack_allocation()
+    from bit import byte_swap
+    from sys import is_big_endian
+    #alias temp_layout = Layout.row_major(1,2,1,2)
+    #var temp_tensor = LayoutTensor[mut = True, ftype, temp_layout, MutableAnyOrigin].stack_allocation()
     var raw_bytes_list: List[Scalar[DType.uint8]] = [0x3f, 0xa0, 0x00, 0x00, 0x40, 0x68, 0x00, 0x00, 0xbf, 0x80, 0x00, 0x00, 0x42, 0x80, 0x00, 0x00] #1.25, 3.625, -1, 64
     var raw_bytes = InlineArray[Scalar[DType.uint8], 16](fill = 0)
     for i in range(16):
         raw_bytes[i] = raw_bytes_list[i]
     #LeNet5.bytesToFType[DType.float32, 16, temp_layout](raw_bytes, temp_tensor)
-    print(temp_tensor)
+    var temp_buffer = InlineArray[UInt8, 4](uninitialized = True)
+    
+    for i in range(4):
+        @parameter
+        if is_big_endian():
+            temp_buffer[i] = raw_bytes[i]
+        else:
+            temp_buffer[4-i-1] = raw_bytes[i]
+    
+    var result = temp_buffer.unsafe_ptr().bitcast[Scalar[DType.float32]]()#Scalar[DType.float32].from_byte(temp_buffer)
+    print(result[])
 
     

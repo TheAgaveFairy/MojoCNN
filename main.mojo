@@ -1,9 +1,9 @@
 from layout import Layout, LayoutTensor, print_layout#, LayoutTensorIter
-from layout.layout_tensor import LayoutTensorIter
+#from layout.layout_tensor import LayoutTensorIter
 from math import sqrt, exp
 from random import random_float64, seed
 from sys.info import sizeof
-from sys import stderr
+from sys import stderr, is_big_endian
 from utils.index import IndexList
 #import simd
 from time import perf_counter_ns
@@ -30,7 +30,7 @@ alias LENGTH_FEATURE3 = (LENGTH_FEATURE2 - LENGTH_KERNEL + 1)
 alias LENGTH_FEATURE4 = (LENGTH_FEATURE3 >> 1)
 alias LENGTH_FEATURE5 = (LENGTH_FEATURE4 - LENGTH_KERNEL + 1)
 
-alias INPUT =   1
+alias INPUT  =  1
 alias LAYER1 =  6
 alias LAYER2 =  6
 alias LAYER3 =  16
@@ -43,7 +43,7 @@ alias PADDING = 2
 
 alias IMAGE_SIZE =      28 # as we read it in from the file, its padded to LENGTH_FEATURE0 (a.k.a. PADDED_SIZE)
 alias PADDED_SIZE = IMAGE_SIZE + 2 * PADDING # 32 x 32 is what we want eventually # this should equal LENGTH_FEATURE0
-alias ftype = DType.float64 # model's float type. pixels are uint8 (bytes), non-negotiable
+alias ftype = DType.float32 # model's float type. pixels are uint8 (bytes), non-negotiable
 
 struct LeNet5(Copyable):
     """
@@ -119,6 +119,8 @@ struct LeNet5(Copyable):
         self.bias5_6 = other.bias5_6
     
     fn __del__(owned self):
+        return
+        
         self.weight0_1.ptr.free()
         self.weight2_3.ptr.free()
         self.weight4_5.ptr.free()
@@ -181,6 +183,8 @@ struct LeNet5(Copyable):
         """
         For initializing for training. Biases stay at zeros.
         """
+        # TODO: could do this with flat tensor.ptr[i] accessing to reduce lines, meh
+
         for i in range(self.weight0_1.shape[0]()):
             for j in range(self.weight0_1.shape[1]()):
                 for k in range(self.weight0_1.shape[2]()):
@@ -208,6 +212,23 @@ struct LeNet5(Copyable):
                 self.weight5_6[i,j] *= Scalar[ftype](sqrt(6.0 / (LAYER5 + OUTPUT)))
 
     @staticmethod
+    fn bytesHelper[filetype: DType](buffer: InlineArray) -> Scalar[filetype]:
+        alias f_sz = filetype.sizeof()
+        var result: Scalar[filetype]
+
+        @parameter
+        if is_big_endian():
+            var reversed = __type_of(buffer)(uninitialized = True)
+            for b in range(f_sz):
+                reversed[b] = buffer[f_sz - 1 - b] 
+            result = reversed.unsafe_ptr().bitcast[Scalar[filetype]]()[]
+        else:
+            result = buffer.unsafe_ptr().bitcast[Scalar[filetype]]()[]
+
+        #print(result, end = ", ")
+        return result
+
+    @staticmethod
     fn bytesToFType[filetype: DType, num_bytes: Int, layout: Layout]
         (bytes: InlineArray[Scalar[DType.uint8], num_bytes],
          tensor: LayoutTensor[mut = True, ftype, layout, MutableAnyOrigin]) -> None:
@@ -217,13 +238,33 @@ struct LeNet5(Copyable):
         """
         
         alias f_sz = filetype.sizeof()
-        alias num_elems = num_bytes / f_sz
-        
-        if num_elems != tensor.size() or num_elems != num_bytes / f_sz:
+        alias num_elems = num_bytes // f_sz
+
+        if num_elems != tensor.size():
             print("FATAL ERROR CONVERTING BYTES TO TENSOR")
             print("num_elems, tensor.size(), len(bytes):", num_elems, tensor.size(), len(bytes))
 
-        if tensor.layout.rank() == 1: # why can't i use "tensor.rank()"?????
+        _ = """
+        ########
+        for idx in range(num_elems):
+            var buffer = InlineArray[Scalar[DType.uint8], f_sz](uninitialized = True)
+            #var buffer = InlineArray[SIMD[DType.uint8, 1], f_sz](uninitialized = True)
+            for byte in range(f_sz):
+                buffer[byte] = bytes[idx * f_sz + byte]
+            #var value = SIMD[filetype, 1].from_bytes(buffer)
+            #var value = Scalar[filetype].from_bytes(buffer)
+            #var value = Scalar[DType.float64].from_bytes(buffer)
+            #@parameter
+            if not is_big_endian():
+                for b in range(f_sz):
+                    buffer[b], buffer[f_sz - 1 - b] = buffer[f_sz - 1 - b], buffer[b] 
+            
+            var value = buffer.unsafe_ptr().bitcast[Scalar[filetype]]()[]
+            tensor.ptr[idx] = value.cast[ftype]()
+        ########
+        """
+        @parameter
+        if layout.rank() == 1: # why can't i use "tensor.rank()"?????
             for idx in range(tensor.size()):
                 var i = idx
                 
@@ -231,10 +272,11 @@ struct LeNet5(Copyable):
                 for bi in range(f_sz):
                     var temp_idx = idx * f_sz + bi
                     buffer[bi] = bytes[temp_idx] # f_sz - 1 - bi to reverse
-                var value = SIMD[filetype, 1].from_bytes[](buffer)
+                #var value = SIMD[filetype, 1].from_bytes(buffer)
+                var value = Self.bytesHelper[filetype](buffer)
                 tensor[i] = value.cast[ftype]()
 
-        if tensor.layout.rank() == 2: # why can't i use "tensor.rank()"?????
+        elif layout.rank() == 2:
             for idx in range(tensor.size()):
                 var i = idx // (tensor.shape[1]())
                 var j = idx % (tensor.shape[1]())
@@ -243,10 +285,11 @@ struct LeNet5(Copyable):
                 for bi in range(f_sz):
                     var temp_idx = idx * f_sz + bi
                     buffer[bi] = bytes[temp_idx] # f_sz - 1 - bi to reverse
-                var value = SIMD[filetype, 1].from_bytes[](buffer)
+                #var value = SIMD[filetype, 1].from_bytes[](buffer)
+                var value = Self.bytesHelper[filetype](buffer)
                 tensor[i,j] = value.cast[ftype]()
         
-        if tensor.layout.rank() == 3: # why can't i use "tensor.rank()"?????
+        elif layout.rank() == 3:
             for idx in range(tensor.size()):
                 var i = idx // (tensor.shape[1]() * tensor.shape[2]())
                 var remainder = idx % (tensor.shape[1]() * tensor.shape[2]())
@@ -257,10 +300,11 @@ struct LeNet5(Copyable):
                 for bi in range(f_sz):
                     var temp_idx = idx * f_sz + bi
                     buffer[bi] = bytes[temp_idx] # f_sz - 1 - bi to reverse
-                var value = SIMD[filetype, 1].from_bytes[](buffer)
+                #var value = SIMD[filetype, 1].from_bytes[](buffer)
+                var value = Self.bytesHelper[filetype](buffer)
                 tensor[i,j,k] = value.cast[ftype]()
                 
-        if tensor.layout.rank() == 4: # why can't i use "tensor.rank()"?????
+        elif layout.rank() == 4:
             for idx in range(tensor.size()):
                 var i = idx // (tensor.shape[1]() * tensor.shape[2]() * tensor.shape[3]())
                 var remainder = idx % (tensor.shape[1]() * tensor.shape[2]() * tensor.shape[3]())
@@ -273,8 +317,12 @@ struct LeNet5(Copyable):
                 for bi in range(f_sz):
                     var temp_idx = idx * f_sz + bi
                     buffer[bi] = bytes[temp_idx] # f_sz - 1 - bi to reverse
-                var value = SIMD[filetype, 1].from_bytes[](buffer)
+                #var value = SIMD[filetype, 1].from_bytes[](buffer)
+                var value = Self.bytesHelper[filetype](buffer)
                 tensor[i,j,k,l] = value.cast[ftype]()
+
+        else:
+            print("TENSOR RANK ERROR:", layout.rank(), file=stderr)
 
     @staticmethod
     fn fromFile[filetype: DType](filename: String) -> Self:
@@ -297,7 +345,7 @@ struct LeNet5(Copyable):
                 buffer[i] = bytes[i]
             Self.bytesToFType[filetype, bytes_to_read, layout](buffer, weights)
         """
-        alias bytes_per_file_weight = filetype.sizeof()# TODO sizeof[filetype]() won't work, must use filetype.sizeof() why?????
+        alias bytes_per_file_weight = filetype.sizeof()# sizeof[filetype]() won't work, must use filetype.sizeof() why?????
         #print("Loading LeNet5 from ", filename, ". filetype number of bytes:", bytes_per_file_weight)
         var model = LeNet5()
 
@@ -314,7 +362,8 @@ struct LeNet5(Copyable):
             var w01_buffer = InlineArray[Scalar[DType.uint8], w01_bytes_to_read](uninitialized = True)
             for i in range(w01_bytes_to_read):
                 w01_buffer[i] = bytes[i]
-            Self.bytesToFType[filetype, w01_bytes_to_read, model.w0_1_layout](w01_buffer, model.weight0_1)
+            #Self.bytesToFType[filetype, w01_bytes_to_read, model.w0_1_layout](w01_buffer, model.weight0_1)
+            Self.bytesToFType[filetype](w01_buffer, model.weight0_1)
 
             alias w23_sz = model.w2_3_layout.size()
             alias w23_bytes_to_read = w23_sz * bytes_per_file_weight
@@ -375,7 +424,7 @@ struct LeNet5(Copyable):
 
         except e:
             print("error at reading lenet5 from file", e)
-        return model
+        return model^
         
 
 struct Feature():
@@ -475,7 +524,7 @@ struct Image(Stringable, Copyable):
         #self.pixels.ptr.free()
 
     fn toNormalized(self) -> Self.DataTensor:
-        # TODO: refactor so that memory can be deleted
+        # TODO: check where / if storage gets freed
         """
         Normalizes from 28x28 uint8 to zero-padded 32x32 float32 (or whatever ftype is for the model).
         
@@ -502,7 +551,8 @@ struct Image(Stringable, Copyable):
 
         for r in range(IMAGE_SIZE):
             for c in range(IMAGE_SIZE):
-                tensor[r + PADDING, c + PADDING] = ((Float64(self.pixels[r, c]) - mean) / std).cast[ftype]()
+                var curr = Float64(Int(self.pixels[r, c]))
+                tensor[r + PADDING, c + PADDING] = ((curr - mean) / std).cast[ftype]()
          
         return tensor # who manages this memory honestly
 
@@ -679,6 +729,7 @@ fn convoluteValid[feat_size: Int,
                         image: LayoutTensor[mut = True, ftype, Layout.row_major(feat_size, feat_size), MutableAnyOrigin],
                         result: LayoutTensor[mut = True, ftype, Layout.row_major(feat_size - kernel_size + 1, feat_size - kernel_size + 1), MutableAnyOrigin]
                      ) -> None:
+    @parameter
     for i in range(result.shape[0]()): # each output pixel row
         for j in range(result.shape[1]()): # each output pixel column
             for a in range(kernel.shape[0]()): # for each weight row of a kernel
@@ -693,6 +744,7 @@ fn convoluteFull[feat_size: Int,
                         image: LayoutTensor[ftype, Layout.row_major(feat_size - kernel_size + 1, feat_size - kernel_size + 1), MutableAnyOrigin],
                         result: LayoutTensor[ftype, Layout.row_major(feat_size, feat_size), MutableAnyOrigin]
                      ) -> None:
+    @parameter
     for i in range(image.shape[0]()): # each input pixel row
         for j in range(image.shape[1]()): # each input pixel column
             for a in range(kernel.shape[0]()): # for each weight row of a kernel
@@ -711,6 +763,8 @@ fn convoluteForward[in_chan: Int,
                         result: LayoutTensor[mut = True, ftype, Layout.row_major(out_chan, feat_size - kernel_size + 1, feat_size - kernel_size + 1)]
                      ) -> None:
     alias out_feat_size = feat_size - kernel_size + 1
+    
+    @parameter
     for x in range(kernels.shape[0]()): # number of input channels
         for y in range(kernels.shape[1]()): # number of output channels
             # slicing syntax (gives a 2d for now) = [ Slice(rows wanted), Slice(cols wanted) IndexList[2](dimensions you want) ] (IndexList[2](dim0, dim1) # etc, or can just be a Scalar offset for each dim to use)
@@ -731,6 +785,7 @@ fn convoluteForward[in_chan: Int,
                             result[y, i, j] +=  image[x, i + a, j + b] * kernels[x, y, a, b]
             """
     # activation function (named "action")
+    @parameter
     for c in range(result.shape[0]()):
         for i in range(result.shape[1]()):
             for j in range(result.shape[2]()):
@@ -751,6 +806,7 @@ fn maxPoolBackward[num_channels: Int,
     alias len0 = inerror.shape[1]() // outerror.shape[1]()
     alias len1 = inerror.shape[2]() // outerror.shape[2]()
 
+    @parameter
     for i in range(num_channels):
         for o0 in range(out_feat_size):
             for o1 in range(out_feat_size):
@@ -777,6 +833,8 @@ fn maxPoolForward[num_channels: Int,
                       ):
     var lenx = input.shape[1]() // output.shape[1]()
     var leny = input.shape[2]() // output.shape[2]()
+
+    @parameter
     for c in range(output.shape[0]()): # each channel
         for i in range(output.shape[1]()): # feature size
             for j in range(output.shape[2]()): # feature size (should match shape[1]())
@@ -816,6 +874,8 @@ fn matmulBackward[num_chan: Int,
                      ) -> None:
 
     alias total_feats = feat_size * feat_size
+
+    @parameter
     for x in range(weight.shape[0]()):
         for y in range(output_size):
             var ie_i = x // (total_feats)
@@ -824,14 +884,17 @@ fn matmulBackward[num_chan: Int,
             var ie_k = rem % feat_size
             inerror[ie_i, ie_j, ie_k] += outerror[y] * weight[x, y]
 
+    @parameter
     for i in range(num_chan):
         for j in range(feat_size):
             for k in range(feat_size):
                 inerror[i, j, k] *= 1 if input[i, j, k] > 0 else 0
 
+    @parameter
     for i in range(output_size):
         bdeltas[i] += outerror[i]
 
+    @parameter
     for x in range(weight.shape[0]()):
         for y in range(weight.shape[1]()):
             var ie_i = x // (total_feats) # num_chan
@@ -853,10 +916,13 @@ fn matmulForward[num_chan: Int,
     # input is m x l, weight is l x n, output is m x n
     # input is (layer5, feat5, feat5), weight is (layer5 * feat5 * feat5, output), output is (output)
     # feat 5 is equal to the value 1
+    @parameter
     for x in range(weight.shape[0]()):
         for y in range(weight.shape[1]()):
             for f in range(feat_size):
                 output[y] += input[x, f, f] * weight[x, y]
+    
+    @parameter
     for i in range(output.shape[0]()):
         output[i] += bias[i]
         output[i] = output[i] if output[i] > 0 else 0
@@ -1005,6 +1071,8 @@ def main():
     #print("hello...", file = stderr)
     var train_data = UnsafePointer[Image].alloc(COUNT_TRAIN)
     var test_data = UnsafePointer[Image].alloc(COUNT_TEST)
+    readData(COUNT_TRAIN, "train", train_data)
+    readData(COUNT_TEST, "test", test_data)
 
     alias tests_to_run = 1
     print(tests_to_run, "tests to run")
@@ -1012,7 +1080,6 @@ def main():
         seed(i) #random
         readData(COUNT_TRAIN, "train", train_data)
         readData(COUNT_TEST, "test", test_data)
-
         shuffleData(train_data, COUNT_TRAIN) # can set the seed to something "better"
 
         var lenet = LeNet5()
@@ -1023,40 +1090,17 @@ def main():
 
         var correct = testing(lenet, test_data, COUNT_TEST)
         print("\nseed:", i, correct, "/", COUNT_TEST)
+        # TODO: SAVE THE MODEL TO A FILE
     
-    # TESTING A PRETRAINED VERSION FROM FILE
-    _ = """
-    var temp_count = 2#Int(COUNT_TRAIN / 10000 * 2)
+    # TESTING A PRETRAINED VERSION FROM OLD FILE
 
     print("loading a saved model")
     var model = LeNet5.fromFile[DType.float64]("model_f64.dat")
-    var feat: Feature
-    correct = 0
-    
-    alias test_size = COUNT_TEST // 100
-    print("testing",  test_size, "images")
-    var start_time = perf_counter_ns()
-
-    for c in range(test_size):
-        feat = Feature()
-        var img = test_data[c]
-        loadInput(feat, img)
-        forward(model, feat)
-        var pred: UInt8 = argMax(feat.output) #[feat.output_layout]
-        #print(feat.output)
-        #print(pred, end = ", ")
-        if pred != img.label:
-            #print("\n\tLast Is Incorrect, Actual:")
-            #print(String(img))
-            correct -= 1
-        correct += 1
-    var end_time = perf_counter_ns()
-    var elapsed_ns = end_time - start_time
-    print("test results:", correct, "correct out of ", test_size, "=", correct / test_size * 100, "%")
-    print(elapsed_ns, "ns")
-    #"""
+    readData(COUNT_TRAIN, "train", train_data)
+    readData(COUNT_TEST, "test", test_data)
+    var correct = testing(model, test_data, COUNT_TEST)
+    print(correct, "/", COUNT_TEST)
 
     # for the losers out there
-    train_data.free()
-    test_data.free()
-
+    #train_data.free()
+    #test_data.free()
