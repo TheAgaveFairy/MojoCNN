@@ -1,5 +1,4 @@
-from layout import Layout, LayoutTensor, print_layout
-#from layout.layout_tensor import LayoutTensorIter
+from layout import Layout, LayoutTensor
 from math import sqrt, exp
 from random import random_float64, seed
 from sys.info import sizeof
@@ -9,21 +8,16 @@ from time import perf_counter_ns
 import os
 import benchmark
 
-from lenet import LeNet5, Feature, Image, loadInput, loadTarget, forward, backward, argMax, ftype, predict, ALPHA
-import lenetgpu
-
-#note this technically isn't LeNet5 as some of the final connections are full instead of sparse, see their paper
+from lenet import Image, LeNet5, Feature, argMax, predict, loadInput, loadTarget, forward, backward
+alias device = "cpu"
 
 alias FILE_TRAIN_IMAGE =    "train-images-idx3-ubyte"
 alias FILE_TRAIN_LABEL =    "train-labels-idx1-ubyte"
 alias FILE_TEST_IMAGE =     "t10k-images-idx3-ubyte"
 alias FILE_TEST_LABEL =     "t10k-labels-idx1-ubyte"
-alias LENET_FILE =          "model.dat"
-alias NUM_WEIGHTS =     51902 # can be calculated but we're just hardcoding for some easier checks at load/save
-alias COUNT_TRAIN =     60000
-alias COUNT_TEST =      10000
 
-alias device = "cpu" # TODO: ensure best practices for selecting device
+alias ftype = lenet.ftype
+alias ALPHA = lenet.ALPHA
 
 fn readData(count: Int, test_set: String, ptr: UnsafePointer[Image]):
     """
@@ -150,43 +144,3 @@ fn showProgress(progress: Int, total: Int) -> None:
         print(" ", end = "")
     print("]", round(ratio * 100, 3), "%", end = "")
 
-def main():
-    #print("hello...", file = stderr)
-    var train_data = UnsafePointer[Image].alloc(COUNT_TRAIN)
-    var test_data = UnsafePointer[Image].alloc(COUNT_TEST)
-    readData(COUNT_TRAIN, "train", train_data)
-    readData(COUNT_TEST, "test", test_data)
-
-    var batch_sizes = [100]#, 300, 600, 1000]
-    print(len(batch_sizes), "tests to run")
-    for b_sz in batch_sizes: #range(tests_to_run):
-        seed(0) #random
-        readData(COUNT_TRAIN, "train", train_data)
-        readData(COUNT_TEST, "test", test_data)
-        shuffleData(train_data, COUNT_TRAIN) # can set the seed to something "better"
-
-        var model = LeNet5()
-        model.randomizeWeights()
-        var batch_size = 300 # could do a number of different batch sizes if we wanted
-
-        var start_time = perf_counter_ns()
-        training(model, train_data, b_sz, COUNT_TRAIN)
-        var end_time = perf_counter_ns()
-        var elapsed = end_time - start_time
-
-        var correct = testing(model, test_data, COUNT_TEST)
-        print("\n\tResults: batch_size:", b_sz, "took", (elapsed // 1_000_000), "ms\n\t\t", correct, "/", COUNT_TEST)
-        # TODO: SAVE THE MODEL TO A FILE
-    
-    # TESTING A PRETRAINED VERSION FROM OLD FILE
-
-    print("loading a saved model")
-    var model = LeNet5.fromFile[DType.float64]("model_f64.dat")
-    readData(COUNT_TRAIN, "train", train_data)
-    readData(COUNT_TEST, "test", test_data)
-    var correct = testing(model, test_data, COUNT_TEST)
-    print(correct, "/", COUNT_TEST)
-
-    # for the losers out there
-    #train_data.free()
-    #test_data.free()

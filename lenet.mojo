@@ -7,6 +7,10 @@ from utils.index import IndexList
 from time import perf_counter_ns
 import os
 
+from gpu.host import DeviceContext
+from gpu import thread_idx, block_idx, block_dim, barrier
+from layout.tensor_builder import LayoutTensorBuild
+
 alias LENGTH_KERNEL = 5
 alias LENGTH_KERNEL_SQ = LENGTH_KERNEL * LENGTH_KERNEL
 
@@ -106,8 +110,6 @@ struct LeNet5(Copyable):
         self.bias5_6 = other.bias5_6
     
     fn __del__(owned self):
-        return
-        
         self.weight0_1.ptr.free()
         self.weight2_3.ptr.free()
         self.weight4_5.ptr.free()
@@ -358,7 +360,7 @@ struct LeNet5(Copyable):
             var w23_buffer = InlineArray[Scalar[DType.uint8], w23_bytes_to_read](uninitialized = True)
             for i in range(w23_bytes_to_read):
                 w23_buffer[i] = bytes[i]
-            Self.bytesToFType[filetype, w23_bytes_to_read, model.w2_3_layout](w23_buffer, model.weight2_3)
+            Self.bytesToFType[filetype](w23_buffer, model.weight2_3)
 
             alias w45_sz = model.w4_5_layout.size()
             alias w45_bytes_to_read = w45_sz * bytes_per_file_weight
@@ -366,7 +368,7 @@ struct LeNet5(Copyable):
             var w45_buffer = InlineArray[Scalar[DType.uint8], w45_bytes_to_read](uninitialized = True)
             for i in range(w45_bytes_to_read):
                 w45_buffer[i] = bytes[i]
-            Self.bytesToFType[filetype, w45_bytes_to_read, model.w4_5_layout](w45_buffer, model.weight4_5)
+            Self.bytesToFType[filetype](w45_buffer, model.weight4_5)
 
             alias w56_sz = model.w5_6_layout.size()
             alias w56_bytes_to_read = w56_sz * bytes_per_file_weight
@@ -374,7 +376,7 @@ struct LeNet5(Copyable):
             var w56_buffer = InlineArray[Scalar[DType.uint8], w56_bytes_to_read](uninitialized = True)
             for i in range(w56_bytes_to_read):
                 w56_buffer[i] = bytes[i]
-            Self.bytesToFType[filetype, w56_bytes_to_read, model.w5_6_layout](w56_buffer, model.weight5_6)
+            Self.bytesToFType[filetype](w56_buffer, model.weight5_6)
 
             # BIASES
             alias b01_sz = model.b0_1_layout.size()
@@ -383,7 +385,7 @@ struct LeNet5(Copyable):
             var b01_buffer = InlineArray[Scalar[DType.uint8], b01_bytes_to_read](uninitialized = True)
             for i in range(b01_bytes_to_read):
                 b01_buffer[i] = bytes[i]
-            Self.bytesToFType[filetype, b01_bytes_to_read, model.b0_1_layout](b01_buffer, model.bias0_1)
+            Self.bytesToFType[filetype](b01_buffer, model.bias0_1)
 
             alias b23_sz = model.b2_3_layout.size()
             alias b23_bytes_to_read = b23_sz * bytes_per_file_weight
@@ -391,7 +393,7 @@ struct LeNet5(Copyable):
             var b23_buffer = InlineArray[Scalar[DType.uint8], b23_bytes_to_read](uninitialized = True)
             for i in range(b23_bytes_to_read):
                 b23_buffer[i] = bytes[i]
-            Self.bytesToFType[filetype, b23_bytes_to_read, model.b2_3_layout](b23_buffer, model.bias2_3)
+            Self.bytesToFType[filetype](b23_buffer, model.bias2_3)
 
             alias b45_sz = model.b4_5_layout.size()
             alias b45_bytes_to_read = b45_sz * bytes_per_file_weight
@@ -399,7 +401,7 @@ struct LeNet5(Copyable):
             var b45_buffer = InlineArray[Scalar[DType.uint8], b45_bytes_to_read](uninitialized = True)
             for i in range(b45_bytes_to_read):
                 b45_buffer[i] = bytes[i]
-            Self.bytesToFType[filetype, b45_bytes_to_read, model.b4_5_layout](b45_buffer, model.bias4_5)
+            Self.bytesToFType[filetype](b45_buffer, model.bias4_5)
 
             alias b56_sz = model.b5_6_layout.size()
             alias b56_bytes_to_read = b56_sz * bytes_per_file_weight
@@ -407,12 +409,13 @@ struct LeNet5(Copyable):
             var b56_buffer = InlineArray[Scalar[DType.uint8], b56_bytes_to_read](uninitialized = True)
             for i in range(b56_bytes_to_read):
                 b56_buffer[i] = bytes[i]
-            Self.bytesToFType[filetype, b56_bytes_to_read, model.b5_6_layout](b56_buffer, model.bias5_6)
+            Self.bytesToFType[filetype](b56_buffer, model.bias5_6)
+
+            model_file.close()
 
         except e:
             print("error at reading lenet5 from file", e)
         return model^
-        
 
 struct Feature():
     """
@@ -576,7 +579,7 @@ struct Image(Stringable, Copyable):
         
 
 @always_inline
-fn action(x: Scalar[ftype]) -> Scalar[ftype]:
+fn reLu(x: Scalar[ftype]) -> Scalar[ftype]:
     # TODO: Make this a function that we pass around.
     """
     Original model passed this around as a function pointer.
@@ -584,7 +587,8 @@ fn action(x: Scalar[ftype]) -> Scalar[ftype]:
     """
     return x if x > 0 else 0
 
-fn actionGrad(y: Scalar[ftype]) -> Scalar[ftype]:
+@always_inline
+fn reLuGrad(y: Scalar[ftype]) -> Scalar[ftype]:
     # TODO: Make this a function that we pass around.
     return 1 if y > 0 else 0
 
@@ -887,24 +891,46 @@ fn loadInput(features: Feature, image: Image):
     ######################################################## IS THIS OKAY?
     normed.ptr.free()
 
-fn forward(lenet: LeNet5, features: Feature):
-    convoluteForward(lenet.weight0_1, lenet.bias0_1, features.input, features.layer1)
-    # input, l1, lf0, lk
+fn forward[device: String](lenet: LeNet5, features: Feature):
+    @parameter
+    if device == "cpu":
+        convoluteForward(lenet.weight0_1, lenet.bias0_1, features.input, features.layer1)
+        # input, l1, lf0, lk
 
-    maxPoolForward(features.layer1, features.layer2)
-    # l1 lf1 lf2
+        maxPoolForward(features.layer1, features.layer2)
+        # l1 lf1 lf2
 
-    convoluteForward(lenet.weight2_3, lenet.bias2_3, features.layer2, features.layer3)
-    #l2 l3 lf2 lk
+        convoluteForward(lenet.weight2_3, lenet.bias2_3, features.layer2, features.layer3)
+        #l2 l3 lf2 lk
 
-    maxPoolForward(features.layer3, features.layer4)
-    # l3 lf3 lf4
+        maxPoolForward(features.layer3, features.layer4)
+        # l3 lf3 lf4
 
-    convoluteForward(lenet.weight4_5, lenet.bias4_5, features.layer4, features.layer5)
-    #l4 l5 lf4 lk
+        convoluteForward(lenet.weight4_5, lenet.bias4_5, features.layer4, features.layer5)
+        #l4 l5 lf4 lk
 
-    matmulForward(features.layer5, features.output, lenet.weight5_6, lenet.bias5_6)
-    #LAYER5, LEA_f5, output
+        matmulForward(features.layer5, features.output, lenet.weight5_6, lenet.bias5_6)
+        #LAYER5, LEA_f5, output
+    elif device == "gpu":
+        convoluteForwardGPU(lenet.weight0_1, lenet.bias0_1, features.input, features.layer1)
+
+        maxPoolForward(features.layer1, features.layer2)
+        # l1 lf1 lf2
+
+        convoluteForward(lenet.weight2_3, lenet.bias2_3, features.layer2, features.layer3)
+        #l2 l3 lf2 lk
+
+        maxPoolForward(features.layer3, features.layer4)
+        # l3 lf3 lf4
+
+        convoluteForward(lenet.weight4_5, lenet.bias4_5, features.layer4, features.layer5)
+        #l4 l5 lf4 lk
+
+        matmulForward(features.layer5, features.output, lenet.weight5_6, lenet.bias5_6)
+        #LAYER5, LEA_f5, output
+    else:
+        print("DEVICE NOT SUPPORTED, PLEASE cpu OR gpu")
+
 
 fn backward(lenet: LeNet5, deltas: LeNet5, errors: Feature, features: Feature) -> None:
     matmulBackward(features.layer5, errors.layer5, errors.output, lenet.weight5_6, deltas.weight5_6, deltas.bias5_6)
@@ -925,9 +951,113 @@ fn backward(lenet: LeNet5, deltas: LeNet5, errors: Feature, features: Feature) -
     convoluteBackward(features.input, errors.input, errors.layer1, lenet.weight0_1, deltas.weight0_1, deltas.bias0_1)
     #input l1 lf0 lk
 
-fn predict(lenet: LeNet5, image: Image) -> Int:
+fn predict[device: String](lenet: LeNet5, image: Image) -> Int:
     # TODO: Probably could be a method of LeNet5.
     var feat = Feature()
     loadInput(feat, image)
-    forward(lenet, feat)
+    forward[device](lenet, feat)
     return argMax(feat.output)
+
+# TODO: take action as parameter
+fn convoluteForwardGPU[in_chan: Int,
+                     out_chan: Int,
+                     feat_size: Int,
+                     kernel_size: Int,
+                     ](
+                        kernels: LayoutTensor[mut = True, ftype, Layout.row_major(in_chan, out_chan, kernel_size, kernel_size)],
+                        bias: LayoutTensor[mut = True, ftype, Layout.row_major(out_chan)],
+                        image: LayoutTensor[mut = True, ftype, Layout.row_major(in_chan, feat_size, feat_size)],
+                        result: LayoutTensor[mut = True, ftype, Layout.row_major(out_chan, feat_size - kernel_size + 1, feat_size - kernel_size + 1)]
+                     ) -> None:
+    alias out_feat_size = feat_size - kernel_size + 1
+    
+    @parameter
+    for x in range(kernels.shape[0]()): # number of input channels
+        @parameter
+        for y in range(kernels.shape[1]()): # number of output channels
+            # slicing syntax (gives a 2d for now) = [ Slice(rows wanted), Slice(cols wanted) IndexList[2](dimensions you want) ] (IndexList[2](dim0, dim1) # etc, or can just be a Scalar offset for each dim to use)
+            var kern_slice = rebind[LayoutTensor[mut = True, ftype, Layout.row_major(kernel_size, kernel_size), MutableAnyOrigin]](kernels.slice[Slice(0, kernel_size), Slice(0, kernel_size), IndexList[2](2,3)](IndexList[2](x,y)))
+            
+            var image_slice = rebind[LayoutTensor[mut = True, ftype, Layout.row_major(feat_size, feat_size), MutableAnyOrigin]](image.slice[Slice(0, feat_size), Slice(0, feat_size), IndexList[2](1,2)](x)) # might be wrong final arg
+
+            var result_slice = rebind[LayoutTensor[mut = True, ftype, Layout.row_major(out_feat_size, out_feat_size), MutableAnyOrigin]](result.slice[Slice(0, out_feat_size), Slice(0, out_feat_size), IndexList[2](1,2)](y))
+
+            try:
+                with DeviceContext() as ctx:
+                    var dev_buf_result = ctx.enqueue_create_buffer[ftype](result_slice.size()).enqueue_fill(0)
+                    var dev_buf_image = ctx.enqueue_create_buffer[ftype](image_slice.size()).enqueue_fill(0)
+                    var dev_buf_kern = ctx.enqueue_create_buffer[ftype](kern_slice.size()).enqueue_fill(0)
+
+                    var dev_result = __type_of(result_slice)(dev_buf_result)
+                    var dev_image = __type_of(image_slice)(dev_buf_image)
+                    var dev_kern = __type_of(kern_slice)(dev_buf_kern)
+
+                    dev_buf_image.enqueue_copy_from(image_slice.ptr)
+                    dev_buf_kern.enqueue_copy_from(kern_slice.ptr)
+
+                    #ctx.enqueue_copy[ftype](dev_buf_image, image_slice.ptr)
+                    #ctx.enqueue_copy[ftype](dev_buf_kern, src_buf = kern_slice.ptr)
+
+                    alias GRID_DIM = (1,1)
+                    alias BLOCK_DIM = (out_feat_size, out_feat_size)
+
+                    # VAR or ALIAS
+                    var test_fn = ctx.compile_function[convoluteValidFusedGPU[result_slice.layout, image_slice.layout, kern_slice.layout, reLu]]()
+                    #var test_fn = ctx.compile_function[convoluteValidFusedGPU]()
+
+                    _ = """
+                    ctx.call_function[convoluteValidFusedGPU[result_slice.layout, image_slice.layout, kern_slice.layout, reLu]
+                    ](dev_result, dev_image, dev_kern, rebind[Scalar[ftype]](bias[y]),
+                    grid_dim = GRID_DIM, block_dim = BLOCK_DIM)
+                    """
+                    ctx.enqueue_function(test_fn, dev_result, dev_image, dev_kern, rebind[Scalar[ftype]](bias[y]),
+                    grid_dim = GRID_DIM, block_dim = BLOCK_DIM)
+                    
+                    #result_host_buffer = ctx.create_host_buffer[ftype](result_slice.size())
+                    #ctx.enqueue_copy(result_slice.ptr, dev_buf_result)
+
+                    dev_buf_result.enqueue_copy_to(result_slice.ptr)
+                    ctx.synchronize()
+            except e:
+                print(e)
+
+
+fn convoluteValidFusedGPU[
+        out_layout: Layout, in_layout: Layout, kernel_layout: Layout, action: fn(Scalar[ftype]) -> Scalar[ftype]
+](
+    output: LayoutTensor[mut = True, ftype, out_layout, MutableAnyOrigin],
+    img: LayoutTensor[mut = True, ftype, in_layout, MutableAnyOrigin],
+    kernel: LayoutTensor[mut = True, ftype, kernel_layout, MutableAnyOrigin],
+    bias: Scalar[ftype],
+) -> None:
+    # global indices
+    var gx = block_dim.x * block_idx.x + thread_idx.x # col
+    var gy = block_dim.y * block_idx.y + thread_idx.y # row
+
+    # assuming square inputs
+    alias feat_size = img.shape[0]()
+    alias kernel_size = kernel.shape[0]()
+    alias out_size = feat_size - kernel_size + 1
+
+    var local_kernel = LayoutTensorBuild[ftype]().row_major[kernel_size, kernel_size]().shared().alloc()
+    # TODO: the LayoutTensorBuild will be deprecated soon, I think it'll look something like ...
+    # ... var local_kernel = LayoutTensor[mut = True, ftype, kernel.layout, AddressSpace.SHARED](uninitialized = True)
+
+    if gx < kernel_size and gy < kernel_size:
+        local_kernel[gy, gx] = kernel[gy, gx]
+
+    if gx < out_size and gy < out_size:
+        var result: output.element_type = 0
+
+        # KERNEL_SIZE dims
+        @parameter
+        for i in range(kernel_size):
+            @parameter
+            for j in range(kernel_size):
+                var in_row = gy + i
+                var in_col = gx + j
+
+                result += img[in_row, in_col] * local_kernel[i, j]
+
+        output[gy, gx] = action(rebind[Scalar[ftype]](result) + bias)
+

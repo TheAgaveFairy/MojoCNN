@@ -13,8 +13,25 @@ from memory import stack_allocation, memset_zero
 from gpu.memory import AddressSpace
 from layout.tensor_builder import LayoutTensorBuild
 
-alias ftype = DType.float32
+#alias ftype = DType.float32
 alias itype = DType.int32
+alias ftype = itype
+
+struct TestingStruct(Copyable, Movable):
+    var arr: InlineArray[Float64, 10]
+    var name: String
+
+    fn __init__(out self):
+        self.arr = __type_of(self.arr)(fill = 0)
+        self.name = "Farting"
+
+    fn __copyinit__(out self, other: Self):
+        self.arr = other.arr
+        self.name = other.name
+
+    fn __moveinit__(out self, owned existing: Self):
+        self.arr = existing.arr^
+        self.name = existing.name^
 
 fn convoluteValidGPU[
         out_layout: Layout, in_layout: Layout, kernel_layout: Layout
@@ -24,8 +41,8 @@ fn convoluteValidGPU[
     kernel: LayoutTensor[mut = False, itype, kernel_layout],
 ) -> None:
     # global indices
-    gx = block_dim.x * block_idx.x + thread_idx.x # col
-    gy = block_dim.y * block_idx.y + thread_idx.y # row
+    var gx = block_dim.x * block_idx.x + thread_idx.x # col
+    var gy = block_dim.y * block_idx.y + thread_idx.y # row
     # local indices
     #lx = thread_idx.x
     #ly = thread_idx.y
@@ -56,6 +73,44 @@ fn convoluteValidGPU[
                 result += img[in_row, in_col] * local_kernel[i, j]
 
         output[gy, gx] = result
+
+
+fn convoluteValidFusedGPU[
+        out_layout: Layout, in_layout: Layout, kernel_layout: Layout, action: fn(Scalar[itype]) -> Scalar[itype]
+](
+    output: LayoutTensor[mut = True, itype, out_layout, MutableAnyOrigin],
+    img: LayoutTensor[mut = True, itype, in_layout, MutableAnyOrigin],
+    kernel: LayoutTensor[mut = True, itype, kernel_layout, MutableAnyOrigin],
+    bias: Scalar[itype],
+) -> None:
+    # global indices
+    var gx = block_dim.x * block_idx.x + thread_idx.x # col
+    var gy = block_dim.y * block_idx.y + thread_idx.y # row
+
+    # assuming square inputs
+    alias feat_size = img.shape[0]()
+    alias kernel_size = kernel.shape[0]()
+    alias out_size = feat_size - kernel_size + 1
+
+    var local_kernel = LayoutTensorBuild[itype]().row_major[kernel_size, kernel_size]().shared().alloc()
+
+    if gx < kernel_size and gy < kernel_size:
+        local_kernel[gy, gx] = kernel[gy, gx]
+
+    if gx < out_size and gy < out_size:
+        var result: output.element_type = 0
+
+        # KERNEL_SIZE dims
+        @parameter
+        for i in range(kernel_size):
+            @parameter
+            for j in range(kernel_size):
+                var in_row = gy + i
+                var in_col = gx + j
+
+                result += img[in_row, in_col] * local_kernel[i, j]
+
+        output[gy, gx] = action(rebind[Scalar[itype]](result) + bias)
 
 fn convoluteFullGPU[
         layout: Layout, kernel_layout: Layout
@@ -92,7 +147,7 @@ fn convoluteFullGPU[
 
         output[row, col] = result
 
-fn matmulGPU[m: Int, l: Int, n: Int](
+fn matmulGPU[m: Int, l: Int, n: Int, action: fn(Scalar[itype]) -> Scalar[itype]](
         a: LayoutTensor[mut = False, itype, Layout.row_major(m,l), MutableAnyOrigin],
         b: LayoutTensor[mut = False, itype, Layout.row_major(l,n), MutableAnyOrigin],
         c: LayoutTensor[mut = True,  itype, Layout.row_major(m,n), MutableAnyOrigin]
@@ -104,10 +159,10 @@ fn matmulGPU[m: Int, l: Int, n: Int](
         var temp: c.element_type = 0
         for k in range(l):
             temp += a[row, k] * b[k, col]
-        c[row, col] = temp
+        c[row, col] = action(rebind[Scalar[itype]](temp))
 
-#fn tester(x: Scalar[itype]) -> Scalar[itype]:
-#    return x + 100
+fn reLu(x: Scalar[itype]) -> Scalar[itype]:
+    return x + 100
 
 #fn tensorAddGPU[layout: Layout, test_fn: fn(Int) -> Int](
 fn tensorAddGPU[layout: Layout](
@@ -143,6 +198,39 @@ fn maxPoolForwardGPU[in_layout: Layout, out_layout: Layout](
         temp = max(temp, input[tr + 1, tc + 1])
         
         output[row, col] = temp
+
+
+fn convoluteForwardGPU[in_chan: Int,
+                     out_chan: Int,
+                     feat_size: Int,
+                     kernel_size: Int,
+                     ](
+                        kernels: LayoutTensor[mut = True, ftype, Layout.row_major(in_chan, out_chan, kernel_size, kernel_size)],
+                        bias: LayoutTensor[mut = True, ftype, Layout.row_major(out_chan)],
+                        image: LayoutTensor[mut = True, ftype, Layout.row_major(in_chan, feat_size, feat_size)],
+                        result: LayoutTensor[mut = True, ftype, Layout.row_major(out_chan, feat_size - kernel_size + 1, feat_size - kernel_size + 1)]
+                     ) -> None:
+    alias out_feat_size = feat_size - kernel_size + 1
+    
+    @parameter
+    for x in range(kernels.shape[0]()): # number of input channels
+        for y in range(kernels.shape[1]()): # number of output channels
+            # slicing syntax (gives a 2d for now) = [ Slice(rows wanted), Slice(cols wanted) IndexList[2](dimensions you want) ] (IndexList[2](dim0, dim1) # etc, or can just be a Scalar offset for each dim to use)
+            var kern_slice = rebind[LayoutTensor[mut = True, ftype, Layout.row_major(kernel_size, kernel_size), MutableAnyOrigin]](kernels.slice[Slice(0, kernel_size), Slice(0, kernel_size), IndexList[2](2,3)](IndexList[2](x,y)))
+            
+            var image_slice = rebind[LayoutTensor[mut = True, ftype, Layout.row_major(feat_size, feat_size), MutableAnyOrigin]](image.slice[Slice(0, feat_size), Slice(0, feat_size), IndexList[2](1,2)](x)) # might be wrong final arg
+
+            var result_slice = rebind[LayoutTensor[mut = True, ftype, Layout.row_major(out_feat_size, out_feat_size), MutableAnyOrigin]](result.slice[Slice(0, out_feat_size), Slice(0, out_feat_size), IndexList[2](1,2)](y))
+
+            convoluteValidFusedGPU[result_slice.layout, image_slice.layout, kern_slice.layout, reLu](result_slice, image_slice, kern_slice, rebind[Scalar[itype]](bias[y]))
+
+    # activation function (named "action")
+    @parameter
+    for c in range(result.shape[0]()):
+        for i in range(result.shape[1]()):
+            for j in range(result.shape[2]()):
+                result[c, i, j] += bias[c]
+                result[c, i, j] = result[c, i, j] if result[c, i, j] > 0.0 else 0.0 
 
 def main():
     
@@ -231,7 +319,7 @@ def main():
         # MATMUL
         for _ in range(1):
             alias mln = kernel_size
-            ctx.enqueue_function[matmulGPU[mln, mln, mln]](
+            ctx.enqueue_function[matmulGPU[mln, mln, mln, reLu]](
                     dev_kern, dev_kern, dev_c,
                     grid_dim = BLOCKS_PER_GRID, block_dim = (kernel_size, kernel_size))
             ctx.synchronize()
@@ -261,6 +349,10 @@ def main():
 
     testBytesToFloat()
 
+    var test_arr = InlineArray[TestingStruct, 10](fill = TestingStruct())
+    for i in range(10):
+        print(test_arr[i].name)
+
 fn testBytesToFloat():
     from bit import byte_swap
     from sys import is_big_endian
@@ -282,5 +374,6 @@ fn testBytesToFloat():
     
     var result = temp_buffer.unsafe_ptr().bitcast[Scalar[DType.float32]]()#Scalar[DType.float32].from_byte(temp_buffer)
     print(result[])
+
 
     
