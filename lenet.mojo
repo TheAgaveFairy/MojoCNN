@@ -6,6 +6,7 @@ from sys import stderr, is_big_endian
 from utils.index import IndexList
 from time import perf_counter_ns
 import os
+from memory import memcpy
 
 from gpu.host import DeviceContext
 from gpu import thread_idx, block_idx, block_dim, barrier
@@ -42,30 +43,38 @@ struct LeNet5(Copyable):
     notable sparsity in final layers that is not in this version.
     """
     # WEIGHTS
-    alias w0_1_layout = Layout.row_major(INPUT, LAYER1, LENGTH_KERNEL, LENGTH_KERNEL)
-    var weight0_1: LayoutTensor[mut = True, ftype, LeNet5.w0_1_layout, MutableAnyOrigin]
+    alias w01_layout = Layout.row_major(INPUT, LAYER1, LENGTH_KERNEL, LENGTH_KERNEL)
+    var w01_storage: UnsafePointer[Scalar[ftype]]
+    var weight0_1: LayoutTensor[mut = True, ftype, Self.w01_layout, MutableAnyOrigin]
     
-    alias w2_3_layout = Layout.row_major(LAYER2, LAYER3, LENGTH_KERNEL, LENGTH_KERNEL)
-    var weight2_3: LayoutTensor[mut = True, ftype, LeNet5.w2_3_layout, MutableAnyOrigin]
+    alias w23_layout = Layout.row_major(LAYER2, LAYER3, LENGTH_KERNEL, LENGTH_KERNEL)
+    var w23_storage: UnsafePointer[Scalar[ftype]]
+    var weight2_3: LayoutTensor[mut = True, ftype, Self.w23_layout, MutableAnyOrigin]
     
-    alias w4_5_layout = Layout.row_major(LAYER4, LAYER5, LENGTH_KERNEL, LENGTH_KERNEL)
-    var weight4_5: LayoutTensor[mut = True, ftype, LeNet5.w4_5_layout, MutableAnyOrigin]
+    alias w45_layout = Layout.row_major(LAYER4, LAYER5, LENGTH_KERNEL, LENGTH_KERNEL)
+    var w45_storage: UnsafePointer[Scalar[ftype]]
+    var weight4_5: LayoutTensor[mut = True, ftype, Self.w45_layout, MutableAnyOrigin]
     
-    alias w5_6_layout = Layout.row_major(LAYER5 * LENGTH_FEATURE5 *  LENGTH_FEATURE5, OUTPUT)
-    var weight5_6: LayoutTensor[mut = True, ftype, LeNet5.w5_6_layout, MutableAnyOrigin]
+    alias w56_layout = Layout.row_major(LAYER5 * LENGTH_FEATURE5 *  LENGTH_FEATURE5, OUTPUT)
+    var w56_storage: UnsafePointer[Scalar[ftype]]
+    var weight5_6: LayoutTensor[mut = True, ftype, Self.w56_layout, MutableAnyOrigin]
 
     # BIASES
-    alias b0_1_layout = Layout.row_major(LAYER1)
-    var bias0_1: LayoutTensor[mut = True, ftype, LeNet5.b0_1_layout, MutableAnyOrigin]
+    alias b01_layout = Layout.row_major(LAYER1)
+    var b01_storage: UnsafePointer[Scalar[ftype]]
+    var bias0_1: LayoutTensor[mut = True, ftype, Self.b01_layout, MutableAnyOrigin]
     
-    alias b2_3_layout = Layout.row_major(LAYER3)
-    var bias2_3: LayoutTensor[mut = True, ftype, LeNet5.b2_3_layout, MutableAnyOrigin]
+    alias b23_layout = Layout.row_major(LAYER3)
+    var b23_storage: UnsafePointer[Scalar[ftype]]
+    var bias2_3: LayoutTensor[mut = True, ftype, Self.b23_layout, MutableAnyOrigin]
     
-    alias b4_5_layout = Layout.row_major(LAYER5)
-    var bias4_5: LayoutTensor[mut = True, ftype, LeNet5.b4_5_layout, MutableAnyOrigin]
+    alias b45_layout = Layout.row_major(LAYER5)
+    var b45_storage: UnsafePointer[Scalar[ftype]]
+    var bias4_5: LayoutTensor[mut = True, ftype, Self.b45_layout, MutableAnyOrigin]
     
-    alias b5_6_layout = Layout.row_major(OUTPUT)
-    var bias5_6: LayoutTensor[mut = True, ftype, LeNet5.b5_6_layout, MutableAnyOrigin]
+    alias b56_layout = Layout.row_major(OUTPUT)
+    var b56_storage: UnsafePointer[Scalar[ftype]]
+    var bias5_6: LayoutTensor[mut = True, ftype, Self.b56_layout, MutableAnyOrigin]
 
     fn __init__(out self):
         """
@@ -73,42 +82,101 @@ struct LeNet5(Copyable):
         or for inference, read in from a file. Only biases really need to be set
         to zeroes.
         """
-        var w01_storage = UnsafePointer[Scalar[ftype]].alloc(Self.w0_1_layout.size())
-        self.weight0_1 = __type_of(self.weight0_1)(w01_storage).fill(0.0)
+        self.w01_storage = UnsafePointer[Scalar[ftype]].alloc(Self.w01_layout.size())
+        self.weight0_1 = __type_of(self.weight0_1)(self.w01_storage).fill(0.0)
 
-        var w23_storage = UnsafePointer[Scalar[ftype]].alloc(Self.w2_3_layout.size())
-        self.weight2_3 = __type_of(self.weight2_3)(w23_storage).fill(0.0)
+        self.w23_storage = UnsafePointer[Scalar[ftype]].alloc(Self.w23_layout.size())
+        self.weight2_3 = __type_of(self.weight2_3)(self.w23_storage).fill(0.0)
         
-        var w45_storage = UnsafePointer[Scalar[ftype]].alloc(Self.w4_5_layout.size())
-        self.weight4_5 = __type_of(self.weight4_5)(w45_storage).fill(0.0)
+        self.w45_storage = UnsafePointer[Scalar[ftype]].alloc(Self.w45_layout.size())
+        self.weight4_5 = __type_of(self.weight4_5)(self.w45_storage).fill(0.0)
         
-        var w56_storage = UnsafePointer[Scalar[ftype]].alloc(Self.w5_6_layout.size())
-        self.weight5_6 = __type_of(self.weight5_6)(w56_storage).fill(0.0)
+        self.w56_storage = UnsafePointer[Scalar[ftype]].alloc(Self.w56_layout.size())
+        self.weight5_6 = __type_of(self.weight5_6)(self.w56_storage).fill(0.0)
 
         # BIASES, no more .stack_allocation()
-        var b01_storage = UnsafePointer[Scalar[ftype]].alloc(Self.b0_1_layout.size())
-        self.bias0_1 = __type_of(self.bias0_1)(b01_storage).fill(0.0)
+        self.b01_storage = UnsafePointer[Scalar[ftype]].alloc(Self.b01_layout.size())
+        self.bias0_1 = __type_of(self.bias0_1)(self.b01_storage).fill(0.0)
         
-        var b23_storage = UnsafePointer[Scalar[ftype]].alloc(Self.b2_3_layout.size())
-        self.bias2_3 = __type_of(self.bias2_3)(b23_storage).fill(0.0)
+        self.b23_storage = UnsafePointer[Scalar[ftype]].alloc(Self.b23_layout.size())
+        self.bias2_3 = __type_of(self.bias2_3)(self.b23_storage).fill(0.0)
         
-        var b45_storage = UnsafePointer[Scalar[ftype]].alloc(Self.b4_5_layout.size())
-        self.bias4_5 = __type_of(self.bias4_5)(b45_storage).fill(0.0)
+        self.b45_storage = UnsafePointer[Scalar[ftype]].alloc(Self.b45_layout.size())
+        self.bias4_5 = __type_of(self.bias4_5)(self.b45_storage).fill(0.0)
         
-        var b56_storage = UnsafePointer[Scalar[ftype]].alloc(Self.b5_6_layout.size())
-        self.bias5_6 = __type_of(self.bias5_6)(b56_storage).fill(0.0)
+        self.b56_storage = UnsafePointer[Scalar[ftype]].alloc(Self.b56_layout.size())
+        self.bias5_6 = __type_of(self.bias5_6)(self.b56_storage).fill(0.0)
 
-    fn __copyinit__(out self, other: Self):
-        self.weight0_1 = other.weight0_1
-        self.weight2_3 = other.weight2_3
-        self.weight4_5 = other.weight4_5
-        self.weight5_6 = other.weight5_6
+    fn __copyinit__(out self, existing: Self):
+        # WEIGHTS
+        self.w01_storage = __type_of(self.w01_storage).alloc(Self.w01_layout.size())
+        memcpy(self.w01_storage, existing.w01_storage, Self.w01_layout.size())
+        self.weight0_1 = __type_of(self.weight0_1)(self.w01_storage)
 
-        self.bias0_1 = other.bias0_1
-        self.bias2_3 = other.bias2_3
-        self.bias4_5 = other.bias4_5
-        self.bias5_6 = other.bias5_6
-    
+        self.w23_storage = __type_of(self.w23_storage).alloc(Self.w23_layout.size())
+        memcpy(self.w23_storage, existing.w23_storage, Self.w23_layout.size())
+        self.weight2_3 = __type_of(self.weight2_3)(self.w23_storage)
+
+        self.w45_storage = __type_of(self.w45_storage).alloc(Self.w45_layout.size())
+        memcpy(self.w45_storage, existing.w45_storage, Self.w45_layout.size())
+        self.weight4_5 = __type_of(self.weight4_5)(self.w45_storage)
+
+        self.w56_storage = __type_of(self.w56_storage).alloc(Self.w56_layout.size())
+        memcpy(self.w56_storage, existing.w56_storage, Self.w56_layout.size())
+        self.weight5_6 = __type_of(self.weight5_6)(self.w56_storage)
+
+        # BIASES
+        self.b01_storage = __type_of(self.b01_storage).alloc(Self.b01_layout.size())
+        memcpy(self.b01_storage, existing.b01_storage, Self.b01_layout.size())
+        self.bias0_1 = __type_of(self.bias0_1)(self.b01_storage)
+
+        self.b23_storage = __type_of(self.b23_storage).alloc(Self.b23_layout.size())
+        memcpy(self.b23_storage, existing.b23_storage, Self.b23_layout.size())
+        self.bias2_3 = __type_of(self.bias2_3)(self.b23_storage)
+
+        self.b45_storage = __type_of(self.b45_storage).alloc(Self.b45_layout.size())
+        memcpy(self.b45_storage, existing.b45_storage, Self.b45_layout.size())
+        self.bias4_5 = __type_of(self.bias4_5)(self.b45_storage)
+
+        self.b56_storage = __type_of(self.b56_storage).alloc(Self.b56_layout.size())
+        memcpy(self.b56_storage, existing.b56_storage, Self.b56_layout.size())
+        self.bias5_6 = __type_of(self.bias5_6)(self.b56_storage)
+
+    fn __moveinit__(out self, owned existing: Self):
+        self.w01_storage = existing.w01_storage
+        self.w23_storage = existing.w23_storage
+        self.w45_storage = existing.w45_storage
+        self.w56_storage = existing.w56_storage
+
+        self.b01_storage = existing.b01_storage
+        self.b23_storage = existing.b23_storage
+        self.b45_storage = existing.b45_storage
+        self.b56_storage = existing.b56_storage
+
+        self.weight0_1 = __type_of(self.weight0_1)(self.w01_storage)
+        existing.w01_storage = __type_of(existing.w01_storage)()
+
+        self.weight2_3 = __type_of(self.weight2_3)(self.w23_storage)
+        existing.w23_storage = __type_of(existing.w23_storage)()
+
+        self.weight4_5 = __type_of(self.weight4_5)(self.w45_storage)
+        existing.w45_storage = __type_of(existing.w45_storage)()
+
+        self.weight5_6 = __type_of(self.weight5_6)(self.w56_storage)
+        existing.w56_storage = __type_of(existing.w56_storage)()
+
+        self.bias0_1 = __type_of(self.bias0_1)(self.b01_storage)
+        existing.b01_storage = __type_of(existing.b01_storage)()
+
+        self.bias2_3 = __type_of(self.bias2_3)(self.b23_storage)
+        existing.b23_storage = __type_of(existing.b23_storage)()
+
+        self.bias4_5 = __type_of(self.bias4_5)(self.b45_storage)
+        existing.b45_storage = __type_of(existing.b45_storage)()
+
+        self.bias5_6 = __type_of(self.bias5_6)(self.b56_storage)
+        existing.b56_storage = __type_of(existing.b56_storage)()
+
     fn __del__(owned self):
         self.weight0_1.ptr.free()
         self.weight2_3.ptr.free()
@@ -201,13 +269,15 @@ struct LeNet5(Copyable):
                 self.weight5_6[i,j] *= Scalar[ftype](sqrt(6.0 / (LAYER5 + OUTPUT)))
 
     @staticmethod
-    fn bytesHelper[filetype: DType](buffer: InlineArray) -> Scalar[filetype]:
+    fn bytesHelper[filetype: DType](buffer: InlineArray[UInt8, filetype.sizeof()]) -> Scalar[filetype]:
         alias f_sz = filetype.sizeof()
         var result: Scalar[filetype]
 
         @parameter
         if is_big_endian():
-            var reversed = __type_of(buffer)(uninitialized = True)
+            # TODO: before the arg was just "buffer: InlineArray" and now I'm not
+            # sure what was happening with this next line ("__type_of" without params)
+            var reversed = __type_of(buffer)(fill = 0)#(uninitialized = True)
             for b in range(f_sz):
                 reversed[b] = buffer[f_sz - 1 - b] 
             result = reversed.unsafe_ptr().bitcast[Scalar[filetype]]()[]
@@ -257,7 +327,7 @@ struct LeNet5(Copyable):
             for idx in range(tensor.size()):
                 var i = idx
                 
-                var buffer = InlineArray[Scalar[DType.uint8], f_sz](uninitialized = True)
+                var buffer = InlineArray[Scalar[DType.uint8], f_sz](fill = 0)#(uninitialized = True)
                 for bi in range(f_sz):
                     var temp_idx = idx * f_sz + bi
                     buffer[bi] = bytes[temp_idx] # f_sz - 1 - bi to reverse
@@ -270,12 +340,13 @@ struct LeNet5(Copyable):
                 var i = idx // (tensor.shape[1]())
                 var j = idx % (tensor.shape[1]())
                 
-                var buffer = InlineArray[Scalar[DType.uint8], f_sz](uninitialized = True)
+                var buffer = InlineArray[Scalar[DType.uint8], f_sz](fill = 0)#(uninitialized = True)
                 for bi in range(f_sz):
                     var temp_idx = idx * f_sz + bi
                     buffer[bi] = bytes[temp_idx] # f_sz - 1 - bi to reverse
                 #var value = SIMD[filetype, 1].from_bytes[](buffer)
                 var value = Self.bytesHelper[filetype](buffer)
+                #print(value, end = ", ")
                 tensor[i,j] = value.cast[ftype]()
         
         elif layout.rank() == 3:
@@ -285,12 +356,13 @@ struct LeNet5(Copyable):
                 var j = remainder // tensor.shape[2]()
                 var k = remainder % tensor.shape[2]()
 
-                var buffer = InlineArray[Scalar[DType.uint8], f_sz](uninitialized = True)
+                var buffer = InlineArray[Scalar[DType.uint8], f_sz](fill = 0)#(uninitialized = True)
                 for bi in range(f_sz):
                     var temp_idx = idx * f_sz + bi
                     buffer[bi] = bytes[temp_idx] # f_sz - 1 - bi to reverse
                 #var value = SIMD[filetype, 1].from_bytes[](buffer)
                 var value = Self.bytesHelper[filetype](buffer)
+                #print(value, end = ", ")
                 tensor[i,j,k] = value.cast[ftype]()
                 
         elif layout.rank() == 4:
@@ -302,12 +374,13 @@ struct LeNet5(Copyable):
                 var k = remainder // tensor.shape[3]()
                 var l = remainder % tensor.shape[3]()
 
-                var buffer = InlineArray[Scalar[DType.uint8], f_sz](uninitialized = True)
+                var buffer = InlineArray[Scalar[DType.uint8], f_sz](fill = 0)#(uninitialized = True)
                 for bi in range(f_sz):
                     var temp_idx = idx * f_sz + bi
                     buffer[bi] = bytes[temp_idx] # f_sz - 1 - bi to reverse
                 #var value = SIMD[filetype, 1].from_bytes[](buffer)
                 var value = Self.bytesHelper[filetype](buffer)
+                #print(value, end = ", ")
                 tensor[i,j,k,l] = value.cast[ftype]()
 
         else:
@@ -319,103 +392,108 @@ struct LeNet5(Copyable):
         Reads in a "model.dat" file and loads it into a Self.
         Note: Closures can't have parameters, yet. Boooo.
         """
-        # TODO: Check for compiler updates on this closure!
-        _ = """
-        fn helper[layer_size: Int, layout: Layout](weights: LayoutTensor[mut = True, ftype, layout, MutableAnyOrigin]):
-            alias size_of_layer = layout.size()
-            alias bytes_to_read = size_of_layer * bytes_per_file_weight
-            var bytes: List[UInt8]
-            try:
-                bytes = model_file.read_bytes(bytes_to_read)
-            except ee:
-                print("helper fromFile", ee)
-            var buffer = InlineArray[Scalar[DType.uint8], bytes_to_read](uninitialized = True)
-            for i in range(bytes_to_read):
-                buffer[i] = bytes[i]
-            Self.bytesToFType[filetype, bytes_to_read, layout](buffer, weights)
-        """
         alias bytes_per_file_weight = filetype.sizeof()# sizeof[filetype]() won't work, must use filetype.sizeof() why?????
+        
+
         #print("Loading LeNet5 from ", filename, ". filetype number of bytes:", bytes_per_file_weight)
         var model = LeNet5()
 
         try:
-            var model_file = open(filename, "r")
+            with open(filename, "r") as model_file:
 
-            #TODO : MAKE THIS BEHAVIOR FUNCTION OR CLOSURE (SEE DOCSTRING) SO I DON'T HAVE TO COPY/PASTE THIS JUNK
-            # I ALMOST MISS C MACROS
+                #TODO : MAKE THIS BEHAVIOR FUNCTION OR CLOSURE (SEE DOCSTRING) SO I DON'T HAVE TO COPY/PASTE THIS JUNK
+                # I ALMOST MISS C MACROS
 
-            # WEIGHTS
-            alias w01_sz = model.w0_1_layout.size() # INPUT * LAYER1 * LENGTH_KERNEL * LENGTH_KERNEL
-            alias w01_bytes_to_read = w01_sz * bytes_per_file_weight
-            var bytes = model_file.read_bytes(w01_bytes_to_read)
-            var w01_buffer = InlineArray[Scalar[DType.uint8], w01_bytes_to_read](uninitialized = True)
-            for i in range(w01_bytes_to_read):
-                w01_buffer[i] = bytes[i]
-            #Self.bytesToFType[filetype, w01_bytes_to_read, model.w0_1_layout](w01_buffer, model.weight0_1)
-            Self.bytesToFType[filetype](w01_buffer, model.weight0_1)
+                # TODO: Check for compiler updates on this closure!
+                _ = """
+                fn helper[layout: Layout](weights: LayoutTensor[mut = True, ftype, layout, MutableAnyOrigin]):
+                    alias size_of_layer = layout.size()
+                    alias bytes_to_read = size_of_layer * bytes_per_file_weight
+                    var bytes: List[UInt8]
+                    try:
+                        bytes = model_file.read_bytes(bytes_to_read)
+                    except ee:
+                        print("helper fromFile", ee)
+                    var buffer = InlineArray[Scalar[DType.uint8], bytes_to_read](uninitialized = True)
+                    for i in range(bytes_to_read):
+                        buffer[i] = bytes[i]
+                    Self.bytesToFType[filetype, bytes_to_read, layout](buffer, weights)
 
-            alias w23_sz = model.w2_3_layout.size()
-            alias w23_bytes_to_read = w23_sz * bytes_per_file_weight
-            bytes = model_file.read_bytes(w23_bytes_to_read)
-            var w23_buffer = InlineArray[Scalar[DType.uint8], w23_bytes_to_read](uninitialized = True)
-            for i in range(w23_bytes_to_read):
-                w23_buffer[i] = bytes[i]
-            Self.bytesToFType[filetype](w23_buffer, model.weight2_3)
+                helper(model.weight0_1) #ETC for each layer
+                """
 
-            alias w45_sz = model.w4_5_layout.size()
-            alias w45_bytes_to_read = w45_sz * bytes_per_file_weight
-            bytes = model_file.read_bytes(w45_bytes_to_read)
-            var w45_buffer = InlineArray[Scalar[DType.uint8], w45_bytes_to_read](uninitialized = True)
-            for i in range(w45_bytes_to_read):
-                w45_buffer[i] = bytes[i]
-            Self.bytesToFType[filetype](w45_buffer, model.weight4_5)
+                # WEIGHTS
+                alias w01_sz = model.w01_layout.size() # INPUT * LAYER1 * LENGTH_KERNEL * LENGTH_KERNEL
+                alias w01_bytes_to_read = w01_sz * bytes_per_file_weight
+                var bytes = model_file.read_bytes(w01_bytes_to_read)
+                var w01_buffer = InlineArray[Scalar[DType.uint8], w01_bytes_to_read](fill = 0)#(uninitialized = True)
+                for i in range(w01_bytes_to_read):
+                    w01_buffer[i] = bytes[i]
+                #Self.bytesToFType[filetype, w01_bytes_to_read, model.w01_layout](w01_buffer, model.weight0_1)
+                Self.bytesToFType[filetype](w01_buffer, model.weight0_1)
 
-            alias w56_sz = model.w5_6_layout.size()
-            alias w56_bytes_to_read = w56_sz * bytes_per_file_weight
-            bytes = model_file.read_bytes(w56_bytes_to_read)
-            var w56_buffer = InlineArray[Scalar[DType.uint8], w56_bytes_to_read](uninitialized = True)
-            for i in range(w56_bytes_to_read):
-                w56_buffer[i] = bytes[i]
-            Self.bytesToFType[filetype](w56_buffer, model.weight5_6)
+                alias w23_sz = model.w23_layout.size()
+                alias w23_bytes_to_read = w23_sz * bytes_per_file_weight
+                bytes = model_file.read_bytes(w23_bytes_to_read)
+                var w23_buffer = InlineArray[Scalar[DType.uint8], w23_bytes_to_read](fill = 0)#(uninitialized = True)
+                for i in range(w23_bytes_to_read):
+                    w23_buffer[i] = bytes[i]
+                Self.bytesToFType[filetype](w23_buffer, model.weight2_3)
 
-            # BIASES
-            alias b01_sz = model.b0_1_layout.size()
-            alias b01_bytes_to_read = b01_sz * bytes_per_file_weight
-            bytes = model_file.read_bytes(b01_bytes_to_read)
-            var b01_buffer = InlineArray[Scalar[DType.uint8], b01_bytes_to_read](uninitialized = True)
-            for i in range(b01_bytes_to_read):
-                b01_buffer[i] = bytes[i]
-            Self.bytesToFType[filetype](b01_buffer, model.bias0_1)
+                alias w45_sz = model.w45_layout.size()
+                alias w45_bytes_to_read = w45_sz * bytes_per_file_weight
+                bytes = model_file.read_bytes(w45_bytes_to_read)
+                var w45_buffer = InlineArray[Scalar[DType.uint8], w45_bytes_to_read](fill = 0)#(uninitialized = True)
+                for i in range(w45_bytes_to_read):
+                    w45_buffer[i] = bytes[i]
+                Self.bytesToFType[filetype](w45_buffer, model.weight4_5)
 
-            alias b23_sz = model.b2_3_layout.size()
-            alias b23_bytes_to_read = b23_sz * bytes_per_file_weight
-            bytes = model_file.read_bytes(b23_bytes_to_read)
-            var b23_buffer = InlineArray[Scalar[DType.uint8], b23_bytes_to_read](uninitialized = True)
-            for i in range(b23_bytes_to_read):
-                b23_buffer[i] = bytes[i]
-            Self.bytesToFType[filetype](b23_buffer, model.bias2_3)
+                alias w56_sz = model.w56_layout.size()
+                alias w56_bytes_to_read = w56_sz * bytes_per_file_weight
+                bytes = model_file.read_bytes(w56_bytes_to_read)
+                var w56_buffer = InlineArray[Scalar[DType.uint8], w56_bytes_to_read](fill = 0)#(uninitialized = True)
+                for i in range(w56_bytes_to_read):
+                    w56_buffer[i] = bytes[i]
+                Self.bytesToFType[filetype](w56_buffer, model.weight5_6)
 
-            alias b45_sz = model.b4_5_layout.size()
-            alias b45_bytes_to_read = b45_sz * bytes_per_file_weight
-            bytes = model_file.read_bytes(b45_bytes_to_read)
-            var b45_buffer = InlineArray[Scalar[DType.uint8], b45_bytes_to_read](uninitialized = True)
-            for i in range(b45_bytes_to_read):
-                b45_buffer[i] = bytes[i]
-            Self.bytesToFType[filetype](b45_buffer, model.bias4_5)
+                # BIASES
+                alias b01_sz = model.b01_layout.size()
+                alias b01_bytes_to_read = b01_sz * bytes_per_file_weight
+                bytes = model_file.read_bytes(b01_bytes_to_read)
+                var b01_buffer = InlineArray[Scalar[DType.uint8], b01_bytes_to_read](fill = 0)#(uninitialized = True)
+                for i in range(b01_bytes_to_read):
+                    b01_buffer[i] = bytes[i]
+                Self.bytesToFType[filetype](b01_buffer, model.bias0_1)
 
-            alias b56_sz = model.b5_6_layout.size()
-            alias b56_bytes_to_read = b56_sz * bytes_per_file_weight
-            bytes = model_file.read_bytes(b56_bytes_to_read)
-            var b56_buffer = InlineArray[Scalar[DType.uint8], b56_bytes_to_read](uninitialized = True)
-            for i in range(b56_bytes_to_read):
-                b56_buffer[i] = bytes[i]
-            Self.bytesToFType[filetype](b56_buffer, model.bias5_6)
+                alias b23_sz = model.b23_layout.size()
+                alias b23_bytes_to_read = b23_sz * bytes_per_file_weight
+                bytes = model_file.read_bytes(b23_bytes_to_read)
+                var b23_buffer = InlineArray[Scalar[DType.uint8], b23_bytes_to_read](fill = 0)#(uninitialized = True)
+                for i in range(b23_bytes_to_read):
+                    b23_buffer[i] = bytes[i]
+                Self.bytesToFType[filetype](b23_buffer, model.bias2_3)
 
-            model_file.close()
+                alias b45_sz = model.b45_layout.size()
+                alias b45_bytes_to_read = b45_sz * bytes_per_file_weight
+                bytes = model_file.read_bytes(b45_bytes_to_read)
+                var b45_buffer = InlineArray[Scalar[DType.uint8], b45_bytes_to_read](fill = 0)#(uninitialized = True)
+                for i in range(b45_bytes_to_read):
+                    b45_buffer[i] = bytes[i]
+                Self.bytesToFType[filetype](b45_buffer, model.bias4_5)
+
+                alias b56_sz = model.b56_layout.size()
+                alias b56_bytes_to_read = b56_sz * bytes_per_file_weight
+                bytes = model_file.read_bytes(b56_bytes_to_read)
+                var b56_buffer = InlineArray[Scalar[DType.uint8], b56_bytes_to_read](fill = 0)#(uninitialized = True)
+                for i in range(b56_bytes_to_read):
+                    b56_buffer[i] = bytes[i]
+                Self.bytesToFType[filetype](b56_buffer, model.bias5_6)
 
         except e:
             print("error at reading lenet5 from file", e)
-        return model^
+        finally:
+            #print(model.bias0_1, model.b01_storage, model.bias0_1.ptr)
+            return model
 
 struct Feature():
     """
