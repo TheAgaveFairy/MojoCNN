@@ -1,5 +1,5 @@
 from layout import Layout, LayoutTensor, print_layout
-from math import sqrt, exp
+from math import sqrt, exp, ceil, log2
 from random import random_float64, seed
 from sys.info import sizeof
 from sys import stderr, is_big_endian, argv
@@ -44,6 +44,7 @@ alias COUNT_TRAIN = 60_000
 alias COUNT_TEST = 10_000
 
 alias div_chans_conv2 = 8 # any lower uses too many resources, out of registers? didn't investigate the CUDA_ERROR
+alias div_chans_conv3= 8 # needs to be a factor of 120
 
 struct LeNet5GPU():
     """
@@ -274,6 +275,49 @@ struct FeatureGPU(Copyable, Movable):
 fn reLu(x: Scalar[ftype]) -> Scalar[ftype]:
     return x if x > 0 else 0
 
+fn matMulFusedKernel[batch_size: UInt, action: fn(Scalar[ftype]) -> Scalar[ftype]](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, batch_size]) -> None:
+    """
+    Enough threads per block to do one output channel at a time as a reduction,
+    so make it a power of two.
+    Grid Dim = batch_size
+    Block Dim = 1 << ceil(log2(in_chans)).
+    """
+    var img_idx = block_idx.x
+    var thread = thread_idx.x
+    alias reduction_size = 1 << Int(ceil(log2(Float64(LAYER5)))) # 128 when LAYER5 is 120
+    
+    var local_weights = __type_of(lenet.weight5_6).stack_allocation() # 120, 10
+    var local_feats = LayoutTensor[mut = True, ftype, Layout.row_major(LAYER5), MutableAnyOrigin].stack_allocation()
+
+    for oc in range(OUTPUT):
+        if thread < LAYER5:
+            local_weights[thread, oc] = lenet.weight5_6[thread, oc]
+    if thread < LAYER5:
+        local_feats[thread] = feats[img_idx].layer5[thread, 0, 0]
+
+    var reduction_buffer = InlineArray[Scalar[ftype], reduction_size](fill = 0)
+
+    for oc in range(OUTPUT):
+        if thread < LAYER5:
+            reduction_buffer[thread] = rebind[Scalar[ftype]](local_weights[thread, oc]) * rebind[Scalar[ftype]](local_feats[thread])
+        var i = 1
+        while i < reduction_size // 2:
+            if thread % (2 * i) == 0:
+                reduction_buffer[thread] += reduction_buffer[thread + i]
+            i *= 2
+
+        var temp = rebind[Scalar[ftype]](reduction_buffer[0] + lenet.bias5_6[oc])
+        feats[img_idx].output[oc] = action(temp)
+
+fn matMulForward[batch_size: UInt](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, batch_size], matmul_kernel: DeviceFunction) raises -> None:
+    alias reduction_size = 1 << Int(ceil(log2(Float64(LAYER5)))) # 128
+    try:
+        with DeviceContext() as ctx:
+            ctx.enqueue_function(matmul_kernel, lenet, feats, grid_dim = (batch_size), block_dim = reduction_size)
+            ctx.synchronize()
+    except e:
+        print(e)
+
 fn maxPool2Kernel[count: UInt](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, count]) -> None:
     """
     Runs as block_dim = , grid_dim = (count, LAYER1 # channels). We have
@@ -303,7 +347,7 @@ fn maxPool2Kernel[count: UInt](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, 
 
         feats[img_idx].layer2[chan, row, col] = temp
 
-fn maxPool2Forward[count: Int](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, count], pool2_kernel: DeviceFunction) raises -> None:
+fn maxPool2Forward[count: UInt](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, count], pool2_kernel: DeviceFunction) raises -> None:
     """
     Probably will become method of LeNet5GPU.
     """
@@ -340,13 +384,72 @@ fn maxPool1Kernel[count: UInt](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, 
 
         feats[img_idx].layer2[chan, row, col] = temp
 
-fn maxPool1Forward[count: Int](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, count], pool1_kernel: DeviceFunction) raises -> None:
+fn maxPool1Forward[count: UInt](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, count], pool1_kernel: DeviceFunction) raises -> None:
     """
     Probably will become method of LeNet5GPU.
     """
     try:
         with DeviceContext() as ctx:
             ctx.enqueue_function(pool1_kernel, lenet, feats, grid_dim = (count, LAYER1), block_dim = (LENGTH_FEATURE1, LENGTH_FEATURE1))
+            ctx.synchronize()
+    except e:
+        print(e)
+
+fn conv3FusedKernel[batch_size: UInt, action: fn(Scalar[ftype]) -> Scalar[ftype]](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, batch_size]) -> None:
+    """
+    Grid Dim = (batch_size, chan_div = 8)
+    Block Dim = (in_channels = 16, kernel_size = 5, ks = 5)
+    Each block handles some "out_channels = 120 // chan_div = 15" output channels
+    for one image.
+    """
+    alias in_chans = LAYER4
+    alias out_chans = LAYER5
+    alias div_chans = div_chans_conv3 # this will be the same as block_dim.y
+    alias num_ocs = out_chans // div_chans # = 120 / 8 = 15 which is how many out_chans this block will do
+    alias feat_total_size = Float64(LAYER4 * LENGTH_KERNEL * LENGTH_KERNEL)
+    alias reduction_size = 1 << Int(ceil(log2(feat_total_size))) # big enough to hold all of one in_chan as a power of two AKA 512 in this case
+    # TODO: did this reduction size in a way that caused a "must be integral type" and got a shit compiler error
+
+    var in_chan = thread_idx.x
+    var col = thread_idx.y
+    var row = thread_idx.z
+    var flat_idx = in_chan * LENGTH_KERNEL * LENGTH_KERNEL + row * LENGTH_KERNEL + col
+
+    var img_idx = block_idx.x
+    var chans_set = block_idx.y
+
+    var offset = chans_set * num_ocs
+
+    var local_weights = LayoutTensor[mut = True, ftype, Layout.row_major(in_chans, num_ocs, LENGTH_KERNEL, LENGTH_KERNEL), MutableAnyOrigin].stack_allocation() # = 6000
+    var local_feats = __type_of(feats[img_idx].layer4).stack_allocation() # = 400
+    var reduction_buffer = InlineArray[Scalar[ftype], reduction_size](fill = 0.0) # 512 = 2 ^ ceil_log2(sizeof(local_feats)) # big enough to reduce all of the feats
+
+    @parameter
+    for oc in range(num_ocs):
+        local_weights[in_chan, oc, row, col] = lenet.weight4_5[in_chan, oc + offset, row, col]
+    local_feats[in_chan, row, col] = feats[img_idx].layer4[in_chan, row, col]
+
+    for oc in range(num_ocs):
+        var temp = rebind[Scalar[ftype]](local_weights[in_chan, oc, row, col] * local_feats[in_chan, row, col])
+        reduction_buffer[flat_idx] = temp
+        var i = 1
+        while i < reduction_size // 2:
+            if flat_idx % (2 * i) == 0:
+                reduction_buffer[flat_idx] += reduction_buffer[flat_idx + i]
+            i *= 2
+
+        temp = rebind[Scalar[ftype]](reduction_buffer[0] + lenet.bias4_5[oc + offset])
+        feats[img_idx].layer5[oc + offset, 0, 0] = action(temp)
+
+fn conv3Forward[batch_size: UInt](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, batch_size], conv3_kernel: DeviceFunction) raises -> None:
+    """
+    Each block handles some amount of output channels (120 // chan_div) for one
+    image.
+    """
+    #constrained[LAYER5 % div_chans_conv3 == 0, "Please ensure conv3 channel divisions %= 0."]()
+    try:
+        with DeviceContext() as ctx:
+            ctx.enqueue_function(conv3_kernel, lenet, feats, grid_dim = (batch_size, div_chans_conv3), block_dim = (LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4))
             ctx.synchronize()
     except e:
         print(e)
@@ -491,7 +594,7 @@ fn conv1Forward[count: Int](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, cou
     except e:
         print(e)
 
-fn batchedForward[count: UInt, batch_size: UInt](data: UnsafePointer[Image], model: LeNet5GPU, conv1: DeviceFunction, pool1: DeviceFunction, conv2: DeviceFunction, pool2: DeviceFunction) raises -> None:
+fn batchedForward[count: UInt, batch_size: UInt](data: UnsafePointer[Image], model: LeNet5GPU, conv1: DeviceFunction, pool1: DeviceFunction, conv2: DeviceFunction, pool2: DeviceFunction, conv3: DeviceFunction, matmul: DeviceFunction) raises -> None:
     constrained[count % batch_size == 0, "count % batch_size != 0"]()
     try:
         with DeviceContext() as ctx:
@@ -502,27 +605,29 @@ fn batchedForward[count: UInt, batch_size: UInt](data: UnsafePointer[Image], mod
                 conv1Forward(model, features, conv1)
                 maxPool1Forward(model, features, pool1)
                 conv2Forward(model, features, conv2)
+                maxPool2Forward(model, features, pool2)
+                conv3Forward(model, features, conv3)
+                matMulForward(model, features, matmul)
                 
-                _ = """
-                with features[0].layer1_storage.map_to_host() as test:
-                    for i in range(features[0].layer1_layout.size()):
-                        print(test[i], end = ", ")
+                with features[0].output_storage.map_to_host() as test:
+                    for k in range(features[0].output_layout.size()):
+                        print(test[k], end = ", ")
+                    print("is: ", data[i].label)
                 print("\n\n")
-                """
                 
     except e:
         print("batchedForward ERROR", e)
         raise e
 
 def main():
-    var modelCPU = LeNet5.fromFile[DType.float64]("model_f64.dat") # CRASHES???
+    var modelCPU = LeNet5.fromFile[DType.float64]("model_f64.dat")
     print(modelCPU.bias0_1)
     var modelGPUfromCPU = LeNet5GPU(modelCPU)
 
     print(LENGTH_KERNEL)
     print(LENGTH_FEATURE0, LENGTH_FEATURE1, LENGTH_FEATURE2, LENGTH_FEATURE3, LENGTH_FEATURE4, LENGTH_FEATURE5)
     print(INPUT, LAYER1, LAYER2, LAYER3, LAYER4, LAYER5, OUTPUT)
-
+    
     var train_data = UnsafePointer[Image].alloc(COUNT_TRAIN)
     var test_data = UnsafePointer[Image].alloc(COUNT_TEST)
     readData(COUNT_TRAIN, "train", train_data)
@@ -543,7 +648,9 @@ def main():
             var pool1 = ctx.compile_function[maxPool1Kernel[batch_size]]()
             var conv2 = ctx.compile_function[conv2FusedKernel[batch_size, reLu]]()
             var pool2 = ctx.compile_function[maxPool2Kernel[batch_size]]()
-            batchedForward[COUNT_TEST, batch_size](test_data, modelGPUfromCPU, conv1, pool1, conv2, pool2)
+            var conv3 = ctx.compile_function[conv3FusedKernel[batch_size, reLu]]()
+            var matmul = ctx.compile_function[matMulFusedKernel[batch_size, reLu]]()
+            batchedForward[COUNT_TEST, batch_size](test_data, modelGPUfromCPU, conv1, pool1, conv2, pool2, conv3, matmul)
             #print("done")
     except e:
         print("ERROR IN MAIN", e)
