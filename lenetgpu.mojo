@@ -471,64 +471,86 @@ fn conv3Forward[batch_size: UInt](lenet: LeNet5GPU, feats: InlineArray[FeatureGP
 fn conv2FusedKernel[count: UInt, action: fn(Scalar[ftype]) -> Scalar[ftype]](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, count]) -> None:
     """
     Grid Dim = (count, channel_divisions), each block will handle 1/channel_divisions the output channels.
-    Block Dim = 10, 10, (16 // channel_divisions) (feat_out, feat_out, half the channels) = 800 TPB.
+    Block Dim = 10, 10, (16 // channel_divisions) = (feat_out, feat_out, dothemath) = 200 to 800 TPB.
+    The number of input channels is LAYER2. Number of output channels is LAYER3.
     """
-    alias in_chans = LAYER2 # lenet.weight0_1.shape[0]() # 6
-    alias out_chans = LAYER3 # lenet.weight0_1.shape[1]() # 16
-    alias kernel_length = LENGTH_KERNEL # lenet.weight0_1.shape[2]() # == shape[3] # 5
-    alias feat_in = LENGTH_FEATURE2 #feats[0].input.shape[1]() # 14
-    alias feat_out = LENGTH_FEATURE3 #feats[0].layer1.shape[1]() # 10 == block_dim.x == block_dim.y
-    alias div_chans = div_chans_conv2 # 8
+    alias CHANS_TO_HANDLE = LAYER3 // div_chans_conv2 # = block_dim.x = 2
+    alias sftype = Scalar[ftype]
 
     var img_idx = block_idx.x
-    #var div_chans = grid_dim.y
-    var chans_section = block_idx.y #zero->four, for output_chan ranges 0-3, 4-7, 8-11, 12-15
-    var offset = chans_section * (out_chans // div_chans) # 0,4,8,12
-    var row = thread_idx.y
-    var col = thread_idx.x
-    var flat_idx = thread_idx.x + thread_idx.y * block_dim.x + thread_idx.z * block_dim.x * block_dim.y
-    var TPB = block_dim.x * block_dim.y * block_dim.z
+    var chans_section = block_idx.y # for the output channels
+    var local_chan = thread_idx.x
+    var col = thread_idx.y
+    var row = thread_idx.z
+    var offset = chans_section * (CHANS_TO_HANDLE) # 0,4,8,12
+    var global_chan = local_chan + offset
 
-    # TODO: ERROR IN HERE
-    var local_kernels = LayoutTensor[mut = True, ftype, Layout.row_major(in_chans, out_chans // div_chans, kernel_length, kernel_length), MutableAnyOrigin, address_space = AddressSpace.SHARED].stack_allocation() # [in_c 6, out_c 16 / 2 = 8*** SEE DOCSTRING, len_kern 5, and 5] = 1200
+    var flat_idx = thread_idx.x * block_dim.y * block_dim.z + thread_idx.y * block_dim.z + thread_idx.z
 
-    var num_chans = out_chans // div_chans
-    for i in range(flat_idx, local_kernels.size(), TPB):
-        var local_out_c = i % num_chans
-        var kw = (i // num_chans) % kernel_length
-        var kh = (i // (num_chans * kernel_length)) % kernel_length
-        var in_c = i // (num_chans * kernel_length * kernel_length)
+    var local_kernels = LayoutTensor[mut = True, ftype, Layout.row_major(LAYER2, CHANS_TO_HANDLE, LENGTH_KERNEL, LENGTH_KERNEL), MutableAnyOrigin, address_space = AddressSpace.SHARED].stack_allocation() # [in_c 6, out_c 16 / 8 = 2*** SEE DOCSTRING, len_kern 5, and 5] = 300
+
+    # TODO: could make this much more efficient!
+    @parameter
+    for ic in range(LAYER2): # 6 input channels
+        if row < LENGTH_KERNEL and col < LENGTH_KERNEL:
+            local_kernels[ic, local_chan, row, col] = lenet.weight2_3[ic, global_chan, row, col]
+        
+    _ = """
+    for i in range(flat_idx, local_kernels.size(), TPB): # 200 TPB to load 600 values
+        var local_out_c = i % CHANS_TO_HANDLE
+        var kw = (i // CHANS_TO_HANDLE) % LENGTH_KERNEL
+        var kh = (i // (CHANS_TO_HANDLE * LENGTH_KERNEL)) % LENGTH_KERNEL
+        var in_c = i // (CHANS_TO_HANDLE * LENGTH_KERNEL * LENGTH_KERNEL)
 
         var global_out_c = local_out_c + offset
-        var global_idx = in_c * (out_chans * kernel_length * kernel_length) + global_out_c * (kernel_length * kernel_length) + (kh * kernel_length) + kw
+        var global_idx = in_c * (out_chans * LENGTH_KERNEL * LENGTH_KERNEL) + global_out_c * (LENGTH_KERNEL * LENGTH_KERNEL) + (kh * LENGTH_KERNEL) + kw
 
         local_kernels.ptr[i] = lenet.weight2_3.ptr[global_idx]
     barrier()
-    
-    
+    """
 
     var local_image = LayoutTensor[mut = True, ftype, FeatureGPU.layer2_layout, MutableAnyOrigin, address_space = AddressSpace.SHARED].stack_allocation()
-    #var local_image = __type_of(feats[img_idx].layer2).stack_allocation() # ftype layer2[LAYER2][LENGTH_FEATURE2][LENGTH_FEATURE2]; 6, 14, 14
-    var double_worker = feat_in - feat_out # 14 - 10
+    alias double_worker = LENGTH_FEATURE2 - LENGTH_FEATURE3 # 14 - 10
+    # TODO: could make this much more efficient!
     @parameter
-    for ic in range(in_chans):
-        local_image[ic, row, col] = feats[img_idx].layer2[ic, row, col]
-        if row < double_worker and col < double_worker:
-            local_image[ic, row + feat_out, col + feat_out] = feats[img_idx].layer2[ic, row + feat_out, col + feat_out]
+    for ic in range(LAYER2):
+        if local_chan == 0: # dont need to do this multiple times in a block
+            local_image[ic, row, col] = feats[img_idx].layer2[ic, row, col]
+            if row < double_worker and col < double_worker:
+                local_image[ic, row + LENGTH_FEATURE3, col + LENGTH_FEATURE3] = feats[img_idx].layer2[ic, row + LENGTH_FEATURE3, col + LENGTH_FEATURE3]
 
+    # dont forget the biases
+    var local_biases = LayoutTensor[mut = True, ftype, LeNet5GPU.b2_3_layout, MutableAnyOrigin, address_space = AddressSpace.SHARED].stack_allocation()
+    if flat_idx < local_biases.size():
+        local_biases[flat_idx] = lenet.bias2_3[flat_idx]
     barrier()
 
+    var result: sftype = 0
+    @parameter
+    for ic in range(LAYER2):
+        @parameter
+        for i in range(LENGTH_KERNEL):
+            @parameter
+            for j in range(LENGTH_KERNEL):
+                var in_row = row + i
+                var in_col = col + j
+
+                result += rebind[sftype](local_image[ic, in_row, in_col]) * rebind[sftype](local_kernels[ic, local_chan, i, j])
+
+    feats[img_idx].layer3[global_chan, row, col] = action(rebind[Scalar[ftype]](result + local_biases[global_chan]))
+
+    _ = """
     #if row < feat_out and col < feat_out: # should be given
-    for oc in range(out_chans // div_chans):
+    for oc in range(CHANS_TO_HANDLE):
         var result: Scalar[ftype] = 0
         var global_oc = oc + offset
         @parameter
         for ic in range(in_chans):
             # VALID CONVOLUTION HERE
             @parameter
-            for i in range(kernel_length):    
+            for i in range(LENGTH_KERNEL):    
                 @parameter
-                for j in range(kernel_length):
+                for j in range(LENGTH_KERNEL):
                     var in_row = row + i
                     var in_col = col + j
 
@@ -540,7 +562,7 @@ fn conv2FusedKernel[count: UInt, action: fn(Scalar[ftype]) -> Scalar[ftype]](len
                     #result += rebind[Scalar[ftype]](local_image[ic, in_row, in_col]) * rebind[Scalar[ftype]](lenet.weight2_3[ic, global_oc, i, j])
 
             feats[img_idx].layer3[oc + offset, row, col] = action(rebind[Scalar[ftype]](result + lenet.bias2_3[global_oc])) # fused action/reLu and bias
-
+    """
 
 fn conv2Forward[count: Int](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, count], conv2_kernel: DeviceFunction) raises -> None:
     """
@@ -551,17 +573,18 @@ fn conv2Forward[count: Int](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, cou
     constrained[LAYER3 % div_chans_conv2 == 0, "Please ensure conv2 channel divisions %= 0."]()
     try:
         with DeviceContext() as ctx:
-            ctx.enqueue_function(conv2_kernel, lenet, feats, grid_dim = (count, div_chans_conv2), block_dim = (LENGTH_FEATURE3, LENGTH_FEATURE3, LAYER3 // div_chans_conv2))
+            ctx.enqueue_function(conv2_kernel, lenet, feats, grid_dim = (count, div_chans_conv2), block_dim = (LAYER3 // div_chans_conv2, LENGTH_FEATURE3, LENGTH_FEATURE3))
             ctx.synchronize()
     except e:
         print(e)
 
 fn conv1FusedKernel[count: UInt, action: fn(Scalar[ftype]) -> Scalar[ftype]](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, count]) -> None:
-    alias in_chans = INPUT # lenet.weight0_1.shape[0]() # INPUT
-    alias out_chans = LAYER1 # lenet.weight0_1.shape[1]() # LAYER1
-    alias kernel_length = LENGTH_KERNEL # lenet.weight0_1.shape[2]() # == shape[3]
-    alias feat_in = LENGTH_FEATURE0 #feats[0].input.shape[1]() # etc. LENGTH_FEATURE0
-    alias feat_out = LENGTH_FEATURE0 - LENGTH_KERNEL + 1 #feats[0].layer1.shape[1]() # etc. LENGTH_FEATURE 1 == block_dim.x == block_dim.y
+    #alias in_chans = INPUT # lenet.weight0_1.shape[0]() # INPUT
+    #alias out_chans = LAYER1 # lenet.weight0_1.shape[1]() # LAYER1
+    #alias kernel_length = LENGTH_KERNEL # lenet.weight0_1.shape[2]() # == shape[3]
+    #alias feat_in = LENGTH_FEATURE0 #feats[0].input.shape[1]() # etc. LENGTH_FEATURE0
+    #alias feat_out = LENGTH_FEATURE0 - LENGTH_KERNEL + 1 #feats[0].layer1.shape[1]() # etc. LENGTH_FEATURE 1 == block_dim.x == block_dim.y
+    alias sftype = Scalar[ftype]
 
     var img_idx = block_idx.x
     var row = thread_idx.y
@@ -569,17 +592,17 @@ fn conv1FusedKernel[count: UInt, action: fn(Scalar[ftype]) -> Scalar[ftype]](len
     var flat_idx = row * block_dim.y + col
 
     # load global kernels into shared mem
-    var local_kernels = LayoutTensor[mut = True, ftype, lenet.w0_1_layout, MutableAnyOrigin, address_space = AddressSpace.SHARED].stack_allocation()
-    #var local_kernels = __type_of(lenet.weight0_1).stack_allocation() # [in_chan 1, out_chan 6, len_kern 5, len_kern 5]
-    if flat_idx < local_kernels.size():
+    var local_kernels = LayoutTensor[mut = True, ftype, LeNet5GPU.w0_1_layout, MutableAnyOrigin, address_space = AddressSpace.SHARED].stack_allocation()
+    if flat_idx < local_kernels.size(): # we have ~784 threads, there are only 150 weights to pull
         local_kernels.ptr[flat_idx] = lenet.weight0_1.ptr[flat_idx]
 
     # load global feature layer into shared mem
+    # TODO: technically this won't handle INPUT > 1
     var local_image = LayoutTensor[mut = True, ftype, FeatureGPU.input_layout, MutableAnyOrigin, address_space = AddressSpace.SHARED].stack_allocation()
-    var double_worker = feat_in - feat_out
+    var double_worker = LENGTH_FEATURE0 - LENGTH_FEATURE1 #feat_in - feat_out # pulling in a 32x32 image with 28x28 threads in our block
     local_image[0, row, col] = feats[img_idx].input[0, row, col] # gets 0..28 for x and y
     if col < double_worker and row < double_worker:
-        local_image[0, row + feat_out, col + feat_out] = feats[img_idx].input[0, row + feat_out, col + feat_out]
+        local_image[0, row + LENGTH_FEATURE3, col + LENGTH_FEATURE3] = feats[img_idx].input[0, row + LENGTH_FEATURE3, col + LENGTH_FEATURE3]
 
     # dont forget the biases
     var local_biases = LayoutTensor[mut = True, ftype, LeNet5GPU.b0_1_layout, MutableAnyOrigin, address_space = AddressSpace.SHARED].stack_allocation()
@@ -589,23 +612,23 @@ fn conv1FusedKernel[count: UInt, action: fn(Scalar[ftype]) -> Scalar[ftype]](len
 
     barrier()
 
-    if row < feat_out and col < feat_out:
+    #if row < feat_out and col < feat_out: NOT NEEDED by design
+    @parameter
+    for oc in range(LAYER1): # LAYER1 is 6
+        var result: Scalar[ftype] = 0
         @parameter
-        for oc in range(out_chans):
-            var result: Scalar[ftype] = 0
+        for ic in range(INPUT): # INPUT is 1, this "loop" isn't really "needed"
+            # VALID CONVOLUTION HERE
             @parameter
-            for ic in range(in_chans):
-                # VALID CONVOLUTION HERE
+            for i in range(LENGTH_KERNEL):    
                 @parameter
-                for i in range(kernel_length):    
-                    @parameter
-                    for j in range(kernel_length):
-                        var in_row = row + i
-                        var in_col = col + j
+                for j in range(LENGTH_KERNEL):
+                    var in_row = row + i
+                    var in_col = col + j
 
-                        result += rebind[Scalar[ftype]](local_image[ic, in_row, in_col]) * rebind[Scalar[ftype]](local_kernels[ic, oc, i, j])
+                    result += rebind[sftype](local_image[ic, in_row, in_col]) * rebind[sftype](local_kernels[ic, oc, i, j])
 
-            feats[img_idx].layer1[oc, row, col] = action(rebind[Scalar[ftype]](result + local_biases[oc])) # fused action/reLu and bias
+        feats[img_idx].layer1[oc, row, col] = action(rebind[sftype](result + local_biases[oc])) # fused action/reLu and bias
 
 fn conv1Forward[count: Int](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, count], conv1_kernel: DeviceFunction) raises -> None:
     """
@@ -715,9 +738,9 @@ def main():
     print(modelCPU.bias0_1)
     var modelGPUfromCPU = LeNet5GPU(modelCPU)
 
-    #print(LENGTH_KERNEL)
-    #print(LENGTH_FEATURE0, LENGTH_FEATURE1, LENGTH_FEATURE2, LENGTH_FEATURE3, LENGTH_FEATURE4, LENGTH_FEATURE5)
-    #print(INPUT, LAYER1, LAYER2, LAYER3, LAYER4, LAYER5, OUTPUT)
+    print("Kernel Length:", LENGTH_KERNEL)
+    print("Feature 0->5:", LENGTH_FEATURE0, LENGTH_FEATURE1, LENGTH_FEATURE2, LENGTH_FEATURE3, LENGTH_FEATURE4, LENGTH_FEATURE5)
+    print("Input Channels, Layer1->5, Output:", INPUT, LAYER1, LAYER2, LAYER3, LAYER4, LAYER5, OUTPUT)
     
     var train_data = UnsafePointer[Image].alloc(COUNT_TRAIN)
     var test_data = UnsafePointer[Image].alloc(COUNT_TEST)
