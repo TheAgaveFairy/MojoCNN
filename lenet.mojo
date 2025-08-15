@@ -500,68 +500,75 @@ struct Feature():
     Holds intermediate results.
     """
     alias input_layout = Layout.row_major(INPUT, LENGTH_FEATURE0, LENGTH_FEATURE0)
+    var input_storage: UnsafePointer[Scalar[ftype]]
     var input: LayoutTensor[mut = True, ftype, Feature.input_layout, MutableAnyOrigin]
 
     alias layer1_layout = Layout.row_major(LAYER1, LENGTH_FEATURE1, LENGTH_FEATURE1)
+    var layer1_storage: UnsafePointer[Scalar[ftype]]
     var layer1: LayoutTensor[mut = True, ftype, Feature.layer1_layout, MutableAnyOrigin]
 
     alias layer2_layout = Layout.row_major(LAYER2, LENGTH_FEATURE2, LENGTH_FEATURE2)
+    var layer2_storage: UnsafePointer[Scalar[ftype]]
     var layer2: LayoutTensor[mut = True, ftype, Feature.layer2_layout, MutableAnyOrigin]
 
     alias layer3_layout = Layout.row_major(LAYER3, LENGTH_FEATURE3, LENGTH_FEATURE3)
+    var layer3_storage: UnsafePointer[Scalar[ftype]]
     var layer3: LayoutTensor[mut = True, ftype, Feature.layer3_layout, MutableAnyOrigin]
     
     alias layer4_layout = Layout.row_major(LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4)
+    var layer4_storage: UnsafePointer[Scalar[ftype]]
     var layer4: LayoutTensor[mut = True, ftype, Feature.layer4_layout, MutableAnyOrigin]
     
     alias layer5_layout = Layout.row_major(LAYER5, LENGTH_FEATURE5, LENGTH_FEATURE5)
+    var layer5_storage: UnsafePointer[Scalar[ftype]]
     var layer5: LayoutTensor[mut = True, ftype, Feature.layer5_layout, MutableAnyOrigin]
     
     alias output_layout = Layout.row_major(OUTPUT)
+    var output_storage: UnsafePointer[Scalar[ftype]]
     var output: LayoutTensor[mut = True, ftype, Feature.output_layout, MutableAnyOrigin]
 
     fn __init__(out self):
         """
         Needs to start as all zeros.
         """
-        var input_storage = UnsafePointer[Scalar[ftype]].alloc(Self.input_layout.size())
-        self.input = __type_of(self.input)(input_storage).fill(0.0)
+        self.input_storage = UnsafePointer[Scalar[ftype]].alloc(Self.input_layout.size())
+        self.input = __type_of(self.input)(self.input_storage).fill(0.0)
 
-        var layer1_storage = UnsafePointer[Scalar[ftype]].alloc(Self.layer1_layout.size())
-        self.layer1 = __type_of(self.layer1)(layer1_storage).fill(0.0)
+        self.layer1_storage = UnsafePointer[Scalar[ftype]].alloc(Self.layer1_layout.size())
+        self.layer1 = __type_of(self.layer1)(self.layer1_storage).fill(0.0)
         
-        var layer2_storage = UnsafePointer[Scalar[ftype]].alloc(Self.layer2_layout.size())
-        self.layer2 = __type_of(self.layer2)(layer2_storage).fill(0.0)
+        self.layer2_storage = UnsafePointer[Scalar[ftype]].alloc(Self.layer2_layout.size())
+        self.layer2 = __type_of(self.layer2)(self.layer2_storage).fill(0.0)
 
-        var layer3_storage = UnsafePointer[Scalar[ftype]].alloc(Self.layer3_layout.size())
-        self.layer3 = __type_of(self.layer3)(layer3_storage).fill(0.0)
+        self.layer3_storage = UnsafePointer[Scalar[ftype]].alloc(Self.layer3_layout.size())
+        self.layer3 = __type_of(self.layer3)(self.layer3_storage).fill(0.0)
 
-        var layer4_storage = UnsafePointer[Scalar[ftype]].alloc(Self.layer4_layout.size())
-        self.layer4 = __type_of(self.layer4)(layer4_storage).fill(0.0)
+        self.layer4_storage = UnsafePointer[Scalar[ftype]].alloc(Self.layer4_layout.size())
+        self.layer4 = __type_of(self.layer4)(self.layer4_storage).fill(0.0)
 
-        var layer5_storage = UnsafePointer[Scalar[ftype]].alloc(Self.layer5_layout.size())
-        self.layer5 = __type_of(self.layer5)(layer5_storage).fill(0.0)
+        self.layer5_storage = UnsafePointer[Scalar[ftype]].alloc(Self.layer5_layout.size())
+        self.layer5 = __type_of(self.layer5)(self.layer5_storage).fill(0.0)
 
-        var output_storage = UnsafePointer[Scalar[ftype]].alloc(Self.output_layout.size())
-        self.output = __type_of(self.output)(output_storage).fill(0.0)
+        self.output_storage = UnsafePointer[Scalar[ftype]].alloc(Self.output_layout.size())
+        self.output = __type_of(self.output)(self.output_storage).fill(0.0)
 
     fn __del__(owned self):
         """
         Not me accidentally leaking 20GB during training...
         """
-        self.input.ptr.free()
-        self.layer1.ptr.free()
-        self.layer2.ptr.free()
-        self.layer3.ptr.free()
-        self.layer4.ptr.free()
-        self.layer5.ptr.free()
-        self.output.ptr.free()
+        self.input_storage.free()
+        self.layer1_storage.free()
+        self.layer2_storage.free()
+        self.layer3_storage.free()
+        self.layer4_storage.free()
+        self.layer5_storage.free()
+        self.output_storage.free()
 
 struct Image(Stringable, Copyable):
     """
     I made the decision to store the raw pixels as they come from a file. Before
     loading into the features to start a pass, it needs to be in a normalized
-    format. I didn't know which to store but I didn't need both.
+    format. I didn't know which to store but didn't need both. Might change.
     """
     alias PixelLayout = Layout.row_major(IMAGE_SIZE, IMAGE_SIZE)
     alias PixelStorage = InlineArray[UInt8, Self.PixelLayout.size()]#(uninitialized = True)
@@ -571,21 +578,22 @@ struct Image(Stringable, Copyable):
     alias DataStorage = InlineArray[Scalar[ftype], Self.DataLayout.size()]#
     alias DataTensor = LayoutTensor[mut = True, ftype, Self.DataLayout, MutableAnyOrigin]
     
+    var pixel_storage: UnsafePointer[UInt8]
     var pixels: Self.PixelTensor
     var label: UInt8 # digits [0, 9] MNIST
 
     fn __init__(out self, ptr: UnsafePointer[UInt8], label: UInt8):
         if label > 9:
             print("Error with incoming label for image:", label)
-        var storage = UnsafePointer[UInt8].alloc(Self.PixelLayout.size())
-        var temp_pixels = Self.PixelTensor(storage)
+        #self.pixel_storage = Self.PixelStorage()
+        self.pixel_storage = UnsafePointer[UInt8].alloc(Self.PixelLayout.size())
+        self.pixels = Self.PixelTensor(self.pixel_storage)
         # memcpy probably possible
         for r in range(IMAGE_SIZE):
             for c in range(IMAGE_SIZE):
                 var idx = r * IMAGE_SIZE + c
-                temp_pixels[r, c] = ptr[idx]
+                self.pixels[r, c] = ptr[idx]
 
-        self.pixels = temp_pixels
         self.label = label
 
     #fn __del__(owned self):
@@ -600,6 +608,7 @@ struct Image(Stringable, Copyable):
         """
         #mut = False gives a terrible terrible compiler warning, please fix, as an aside for making LayoutTensors
         var storage = UnsafePointer[Scalar[ftype]].alloc(Self.DataLayout.size())
+        #var storage = DataStorage()
         var tensor = Self.DataTensor(storage).fill(0.0)
 
         var mean: Float64
@@ -652,9 +661,16 @@ struct Image(Stringable, Copyable):
         return temp + "--------\n"
 
     fn __copyinit__(out self, other: Self):
-        self.pixels = other.pixels
+        self.pixel_storage = UnsafePointer[UInt8].alloc(Self.PixelLayout.size())
+        memcpy(self.pixel_storage, other.pixel_storage, Self.PixelLayout.size())
+        self.pixels = Self.PixelTensor(self.pixel_storage)
         self.label = other.label
-        
+
+    fn __moveinit__(out self, owned existing: Self):
+        self.pixel_storage = existing.pixel_storage
+        self.pixels = __type_of(self.pixels)(self.pixel_storage)
+        existing.pixel_storage = __type_of(existing.pixel_storage)()
+        self.label = existing.label
 
 @always_inline
 fn reLu(x: Scalar[ftype]) -> Scalar[ftype]:
