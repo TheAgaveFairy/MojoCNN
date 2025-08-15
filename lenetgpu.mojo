@@ -759,12 +759,26 @@ fn singleForward(img: Image, model: LeNet5GPU, lenet_cpu: LeNet5, conv1: DeviceF
 
     return gpu_guess # TODO: return the prediction
 
+fn getResults[batch_size: UInt](features: InlineArray[FeatureGPU, batch_size]) raises -> InlineArray[UInt8, batch_size]:
+    var output = InlineArray[UInt8, batch_size](fill = 69) # "bad value"
+    try:
+        for j in range(batch_size):
+            with features[j].output_storage.map_to_host() as test:
+                var wants_tensor = __type_of(features[j].output).stack_allocation()
+                for k in range(OUTPUT): #TODO: memcpy
+                    wants_tensor[k] = test[k]
+                var guess = lenet.argMax(wants_tensor)
+                output[j] = guess
+    except e:
+        print(e)
+    return output^
+
 fn batchedForward[count: UInt, batch_size: UInt](data: UnsafePointer[Image], model: LeNet5GPU, conv1: DeviceFunction, pool1: DeviceFunction, conv2: DeviceFunction, pool2: DeviceFunction, conv3: DeviceFunction, matmul: DeviceFunction) raises -> UInt:
     constrained[count % batch_size == 0, "count % batch_size != 0"]()
     var correct = 0
     try:
         with DeviceContext() as ctx:
-            @parameter
+            #@parameter
             for i in range(0, count, batch_size):
                 showProgress(i, count)
                 var features = InlineArray[FeatureGPU, batch_size](fill = FeatureGPU())
@@ -778,6 +792,16 @@ fn batchedForward[count: UInt, batch_size: UInt](data: UnsafePointer[Image], mod
                 conv3Forward(model, features, conv3)
                 matMulForward(model, features, matmul)
 
+                var results = getResults(features)
+                #var results = InlineArray[UInt8, batch_size](fill = 3) #
+                @parameter
+                for j in range(batch_size):
+                    if results[j] == UInt(data[i + j].label):
+                        correct += 1
+                    else:
+                        pass
+
+                _ = """
                 for j in range(batch_size):
                     with features[j].output_storage.map_to_host() as test:
                         var wants_tensor = __type_of(features[j].output).stack_allocation()
@@ -789,7 +813,7 @@ fn batchedForward[count: UInt, batch_size: UInt](data: UnsafePointer[Image], mod
                         else:
                             pass
                             #print("Bad guess:", guess, data[i + j].label)
-                    
+                """
     except e:
         print("batchedForward ERROR", e)
         raise e
