@@ -47,6 +47,9 @@ alias COUNT_TEST = 10_000
 alias div_chans_conv2 = 8 # any lower uses too many resources, out of registers? didn't investigate the CUDA_ERROR
 alias div_chans_conv3= 8 # needs to be a factor of 120
 
+#alias BatchedFeatures = InlineArray[FeatureGPU, batch_size]
+#alias SingleFeature = InlineArray[FeatureGPU, 1]
+
 struct LeNet5GPU():
     """
     The LeNet5 model. In the actual LeCun et al implementation, there is some
@@ -228,44 +231,77 @@ struct FeatureGPU(Copyable, Movable):
             raise e
     
     fn __copyinit__(out self, other: Self):
-        self.input = other.input
-        self.layer1 = other.layer1
-        self.layer2 = other.layer2
-        self.layer3 = other.layer3
-        self.layer4 = other.layer4
-        self.layer5 = other.layer5
-        self.output = other.output
+        try:
+            with DeviceContext() as ctx:
+                self.input_storage = ctx.enqueue_create_buffer[ftype](Self.input_layout.size()).enqueue_fill(0)
+                self.layer1_storage = ctx.enqueue_create_buffer[ftype](Self.layer1_layout.size()).enqueue_fill(0)
+                self.layer2_storage = ctx.enqueue_create_buffer[ftype](Self.layer2_layout.size()).enqueue_fill(0)
+                self.layer3_storage = ctx.enqueue_create_buffer[ftype](Self.layer3_layout.size()).enqueue_fill(0)
+                self.layer4_storage = ctx.enqueue_create_buffer[ftype](Self.layer4_layout.size()).enqueue_fill(0)
+                self.layer5_storage = ctx.enqueue_create_buffer[ftype](Self.layer5_layout.size()).enqueue_fill(0)
+                self.output_storage = ctx.enqueue_create_buffer[ftype](Self.output_layout.size()).enqueue_fill(0)
+                
+                ctx.synchronize()
+                
+                self.input_storage.enqueue_copy_from(other.input_storage)
+                self.layer1_storage.enqueue_copy_from(other.layer1_storage)
+                self.layer2_storage.enqueue_copy_from(other.layer2_storage)
+                self.layer3_storage.enqueue_copy_from(other.layer3_storage)
+                self.layer4_storage.enqueue_copy_from(other.layer4_storage)
+                self.layer5_storage.enqueue_copy_from(other.layer5_storage)
+                self.output_storage.enqueue_copy_from(other.output_storage)
+                
+                ctx.synchronize()
 
-        self.input_storage = other.input_storage
-        self.layer1_storage = other.layer1_storage
-        self.layer2_storage = other.layer2_storage
-        self.layer3_storage = other.layer3_storage
-        self.layer4_storage = other.layer4_storage
-        self.layer5_storage = other.layer5_storage
-        self.output_storage = other.output_storage
+                self.input = __type_of(self.input)(self.input_storage)
+                self.layer1 = __type_of(self.layer1)(self.layer1_storage)
+                self.layer2 = __type_of(self.layer2)(self.layer2_storage)
+                self.layer3 = __type_of(self.layer3)(self.layer3_storage)
+                self.layer4 = __type_of(self.layer4)(self.layer4_storage)
+                self.layer5 = __type_of(self.layer5)(self.layer5_storage)
+                self.output = __type_of(self.output)(self.output_storage)
+
+                ctx.synchronize()
+        
+        except e: # TODO: this is just garbage below, idk what to do in case of a failure
+            print(e)
+            print(e, file = stderr)
+            self.input_storage = other.input_storage
+            self.layer1_storage = other.layer1_storage
+            self.layer2_storage = other.layer2_storage
+            self.layer3_storage = other.layer3_storage
+            self.layer4_storage = other.layer4_storage
+            self.layer5_storage = other.layer5_storage
+            self.output_storage = other.output_storage
+            self.input = __type_of(self.input)(self.input_storage)
+            self.layer1 = __type_of(self.layer1)(self.layer1_storage)
+            self.layer2 = __type_of(self.layer2)(self.layer2_storage)
+            self.layer3 = __type_of(self.layer3)(self.layer3_storage)
+            self.layer4 = __type_of(self.layer4)(self.layer4_storage)
+            self.layer5 = __type_of(self.layer5)(self.layer5_storage)
+            self.output = __type_of(self.output)(self.output_storage)
 
     fn __moveinit__(out self, owned existing: Self):
-        self.input = existing.input
-        self.layer1 = existing.layer1
-        self.layer2 = existing.layer2
-        self.layer3 = existing.layer3
-        self.layer4 = existing.layer4
-        self.layer5 = existing.layer5
-        self.output = existing.output
+        print("FGPU moveinit") # TODO: this aint right but isnt ever called afaik
 
-        self.input_storage = existing.input_storage^
-        self.layer1_storage = existing.layer1_storage^
-        self.layer2_storage = existing.layer2_storage^
-        self.layer3_storage = existing.layer3_storage^
-        self.layer4_storage = existing.layer4_storage^
-        self.layer5_storage = existing.layer5_storage^
-        self.output_storage = existing.output_storage^
+        self.input_storage = existing.input_storage
+        self.layer1_storage = existing.layer1_storage
+        self.layer2_storage = existing.layer2_storage
+        self.layer3_storage = existing.layer3_storage
+        self.layer4_storage = existing.layer4_storage
+        self.layer5_storage = existing.layer5_storage
+        self.output_storage = existing.output_storage
+
+        self.input = __type_of(self.input)(self.input_storage)
+        self.layer1 = __type_of(self.layer1)(self.layer1_storage)
+        self.layer2 = __type_of(self.layer2)(self.layer2_storage)
+        self.layer3 = __type_of(self.layer3)(self.layer3_storage)
+        self.layer4 = __type_of(self.layer4)(self.layer4_storage)
+        self.layer5 = __type_of(self.layer5)(self.layer5_storage)
+        self.output = __type_of(self.output)(self.output_storage)
     
     fn loadInput(self, image: Image) -> None:
         var normed = image.toNormalized() # (32, 32) -> (1, 32, 32)
-        #for i in range(PADDED_SIZE): # PADDED_SIZE
-        #    for j in range(PADDED_SIZE): # PADDED_SIZE
-        #        print(".", i, j, normed[i, j])
         try:
             with self.input_storage.map_to_host() as load_me:
                 var temp_tensor = __type_of(self.input)(load_me)
@@ -328,7 +364,7 @@ fn matMulForward[batch_size: UInt](lenet: LeNet5GPU, feats: InlineArray[FeatureG
     alias reduction_size = 1 << Int(ceil(log2(Float64(LAYER5)))) # 128
     try:
         with DeviceContext() as ctx:
-            ctx.enqueue_function(matmul_kernel, lenet, feats, grid_dim = (batch_size), block_dim = reduction_size)
+            ctx.enqueue_function(matmul_kernel, lenet, feats, grid_dim = (batch_size), block_dim = (reduction_size))
             ctx.synchronize()
     except e:
         print(e)
@@ -340,11 +376,9 @@ fn maxPool2Kernel[batch_size: UInt](lenet: LeNet5GPU, feats: InlineArray[Feature
     so pay attention there. No extras for loading, etc.
     """
     var img_idx = block_idx.x # range(batch_size)
-    #var in_chan = block_idx.y # range(LAYER3
     var row = thread_idx.z # range(LENGTH_FEATURE4)
     var col = thread_idx.y # range(LENGTH_FEATURE4)
     var chan = thread_idx.x # range(LAYER4)
-    #var flat_idx = thread_idx.x + thread_idx.y * block_dim.x + thread_idx.z * block_dim.x * block_dim.y
 
     alias image_slice = LayoutTensor[mut = True, ftype, FeatureGPU.layer3_layout, MutableAnyOrigin, address_space = AddressSpace.SHARED]
     
@@ -687,18 +721,6 @@ fn singleForward(img: Image, model: LeNet5GPU, lenet_cpu: LeNet5, conv1: DeviceF
     
     try:
         with DeviceContext() as ctx:
-            _ = """
-            var conv1 = ctx.compile_function[conv1FusedKernel[batch_size, reLu]]()
-            var pool1 = ctx.compile_function[maxPool1Kernel[batch_size]]()
-            var conv2 = ctx.compile_function[conv2FusedKernel[batch_size, reLu]]()
-            var pool2 = ctx.compile_function[maxPool2Kernel[batch_size]]()
-            var conv3 = ctx.compile_function[conv3FusedKernel[batch_size, reLu]]()
-            var matmul = ctx.compile_function[matMulFusedKernel[batch_size, reLu]]()
-            """
-            #var feat = FeatureGPU()
-
-            #print("img_copy", String(img_copy))
-            #print("img_og  ", String(img))
             # TODO: clean up naming / convention for loading inputs to feature buffer
             
             # run a CPU version
@@ -763,28 +785,59 @@ fn getResults[batch_size: UInt](features: InlineArray[FeatureGPU, batch_size]) r
     var output = InlineArray[UInt8, batch_size](fill = 69) # "bad value"
     try:
         for j in range(batch_size):
-            with features[j].output_storage.map_to_host() as test:
-                var wants_tensor = __type_of(features[j].output).stack_allocation()
+            with features[j].output_storage.map_to_host() as result:
+                var idx: UInt = 13 # "bad" value
+                var val: Scalar[ftype] = -1.0
                 for k in range(OUTPUT): #TODO: memcpy
-                    wants_tensor[k] = test[k]
-                var guess = lenet.argMax(wants_tensor)
+                    if result[k] > val:
+                        idx = k
+                        val = result[k]
+
+                var guess = idx#lenet.argMax(wants_tensor) # TODO: this was causing a WEIRD bug
                 output[j] = guess
     except e:
         print(e)
     return output^
 
+fn tempPrinter[batch_size: UInt](feats: InlineArray[FeatureGPU, batch_size]) -> None:
+    var img_idx = block_idx.x
+    var tid = thread_idx.x
+    var output = "Hello from " + String(img_idx) + ": "
+    for i in range(200, 205): # show first 5
+        output += String(feats[img_idx].input.ptr[i]) + " "
+    print(output)
+
 fn batchedForward[count: UInt, batch_size: UInt](data: UnsafePointer[Image], model: LeNet5GPU, conv1: DeviceFunction, pool1: DeviceFunction, conv2: DeviceFunction, pool2: DeviceFunction, conv3: DeviceFunction, matmul: DeviceFunction) raises -> UInt:
     constrained[count % batch_size == 0, "count % batch_size != 0"]()
+    print("Batched forward, batch size is:", batch_size)
+    alias reduction_size = 1 << Int(ceil(log2(Float64(LAYER5)))) # 128
     var correct = 0
+    var features = InlineArray[FeatureGPU, batch_size](fill = FeatureGPU())
+
     try:
         with DeviceContext() as ctx:
-            #@parameter
+            #@parameter # TODO: explodes compile time
             for i in range(0, count, batch_size):
-                showProgress(i, count)
-                var features = InlineArray[FeatureGPU, batch_size](fill = FeatureGPU())
+                #showProgress(i, count)
                 for j in range(batch_size):
                     features[j].loadInput(data[i + j])
 
+                # THESE KERNEL CALLS ARE NOT THE SOURCE OF THE MEMORY LEAK
+                _ = """
+                ctx.enqueue_function(conv1, model, features, grid_dim = (batch_size), block_dim = (LENGTH_FEATURE1, LENGTH_FEATURE1))
+                ctx.synchronize()
+                ctx.enqueue_function(pool1, model, features, grid_dim = (batch_size, LAYER1), block_dim = (LENGTH_FEATURE1, LENGTH_FEATURE1))
+                ctx.synchronize()
+                ctx.enqueue_function(conv2, model, features, grid_dim = (batch_size, div_chans_conv2), block_dim = (LAYER3 // div_chans_conv2, LENGTH_FEATURE3, LENGTH_FEATURE3))
+                ctx.synchronize()
+                ctx.enqueue_function(pool2, model, features, grid_dim = (batch_size), block_dim = (LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4))
+                ctx.synchronize()
+                ctx.enqueue_function(conv3, model, features, grid_dim = (batch_size, div_chans_conv3), block_dim = (LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4))
+                ctx.synchronize()
+                ctx.enqueue_function(matmul, model, features, grid_dim = (batch_size), block_dim = reduction_size)
+                ctx.synchronize()
+                #compareBuffers[feat.output_layout](feat.output_storage, feat_cpu.output.ptr, label = "Output")
+                """
                 conv1Forward(model, features, conv1)
                 maxPool1Forward(model, features, pool1)
                 conv2Forward(model, features, conv2)
@@ -793,30 +846,16 @@ fn batchedForward[count: UInt, batch_size: UInt](data: UnsafePointer[Image], mod
                 matMulForward(model, features, matmul)
 
                 var results = getResults(features)
-                #var results = InlineArray[UInt8, batch_size](fill = 3) #
                 @parameter
                 for j in range(batch_size):
                     if results[j] == UInt(data[i + j].label):
                         correct += 1
-                    else:
-                        pass
-
-                _ = """
-                for j in range(batch_size):
-                    with features[j].output_storage.map_to_host() as test:
-                        var wants_tensor = __type_of(features[j].output).stack_allocation()
-                        for k in range(OUTPUT):
-                            wants_tensor[k] = test[k]
-                        var guess = lenet.argMax(wants_tensor)
-                        if guess == UInt(data[i + j].label):
-                            correct += 1
-                        else:
-                            pass
-                            #print("Bad guess:", guess, data[i + j].label)
-                """
+                    #else:
+                        #print(i + j, results[j], "?=", UInt(data[i+j].label))
     except e:
         print("batchedForward ERROR", e)
         raise e
+
     return correct
 
 def main():
@@ -834,7 +873,8 @@ def main():
 
     try:
         with DeviceContext() as ctx:
-            alias batch_size = 50 # more than ~75 fails "uses too much parameter space"
+            #_ = """
+            alias batch_size = 75 # more than ~75 fails "uses too much parameter space"
 
             var conv1 = ctx.compile_function[conv1FusedKernel[batch_size, reLu]]()
             var pool1 = ctx.compile_function[maxPool1Kernel[batch_size]]()
@@ -843,9 +883,15 @@ def main():
             var conv3 = ctx.compile_function[conv3FusedKernel[batch_size, reLu]]()
             var matmul = ctx.compile_function[matMulFusedKernel[batch_size, reLu]]()
             
-            var correct = batchedForward[COUNT_TRAIN, batch_size](train_data, modelGPUfromCPU, conv1, pool1, conv2, pool2, conv3, matmul)
-            print("BATCHED:", correct, "/", COUNT_TRAIN)
+            var start_time = perf_counter_ns()
 
+            var correct = batchedForward[COUNT_TRAIN, batch_size](train_data, modelGPUfromCPU, conv1, pool1, conv2, pool2, conv3, matmul)
+            var end_time = perf_counter_ns()
+            var elapsed = end_time - start_time
+
+            print("\nBATCHED results:", correct, "/", COUNT_TRAIN)
+            print(elapsed, "ns")
+            #"""
             _ = """
             var single_conv1 = ctx.compile_function[conv1FusedKernel[1, reLu]]()
             var single_pool1 = ctx.compile_function[maxPool1Kernel[1]]()
@@ -853,6 +899,9 @@ def main():
             var single_pool2 = ctx.compile_function[maxPool2Kernel[1]]()
             var single_conv3 = ctx.compile_function[conv3FusedKernel[1, reLu]]()
             var single_matmul = ctx.compile_function[matMulFusedKernel[1, reLu]]()
+            
+            #readData(COUNT_TRAIN, "train", train_data)
+            #readData(COUNT_TEST, "test", test_data)
 
             correct = 0
             for i in range(COUNT_TEST):
@@ -861,7 +910,7 @@ def main():
                 if gpu_result == test_data[i].label:
                     correct += 1
                 #print(gpu_result, test_data[i].label,"\n\n")
-            print("SINGLE:", correct, "/", COUNT_TEST)
+            print("\nSINGLE results:", correct, "/", COUNT_TEST)
             """
     except e:
         print("ERROR IN MAIN", e)

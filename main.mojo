@@ -157,6 +157,7 @@ def main():
     readData(COUNT_TRAIN, "train", train_data)
     readData(COUNT_TEST, "test", test_data)
 
+    _ = """
     var batch_sizes = [100]#, 300, 600, 1000]
     print(len(batch_sizes), "tests to run")
     for b_sz in batch_sizes: #range(tests_to_run):
@@ -177,15 +178,19 @@ def main():
         var correct = testing(model, test_data, COUNT_TEST)
         print("\n\tResults: batch_size:", b_sz, "took", (elapsed // 1_000_000), "ms\n\t\t", correct, "/", COUNT_TEST)
         # TODO: SAVE THE MODEL TO A FILE
-    
+    """
     # TESTING A PRETRAINED VERSION FROM OLD FILE
 
     print("loading a saved model")
     var model = LeNet5.fromFile[DType.float64]("model_f64.dat")
     readData(COUNT_TRAIN, "train", train_data)
     readData(COUNT_TEST, "test", test_data)
-    var correct = testing(model, test_data, COUNT_TEST)
-    print(correct, "/", COUNT_TEST)
+    start_time = perf_counter_ns()
+    var correct = testing(model, train_data, COUNT_TRAIN)
+    end_time = perf_counter_ns()
+    print(correct, "/", COUNT_TRAIN)
+    elapsed = end_time - start_time
+    print( elapsed , "ns")
 
     # for the losers out there
     #train_data.free()

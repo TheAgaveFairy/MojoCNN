@@ -1,0 +1,95 @@
+=== LeNet GPU Benchmark Results ===
+Started: Mon Aug 18 11:03:15 PM PDT 2025
+
+=== Run 1/5 - Mon Aug 18 11:03:15 PM PDT 2025 ===
+Batched forward, batch size is: 50
+
+BATCHED results: 58252 / 60000
+2069191899 ns
+
+----------------------------------------
+
+=== Run 2/5 - Mon Aug 18 11:03:18 PM PDT 2025 ===
+
+--- New benchmark session: Mon Aug 18 11:03:21 PM PDT 2025 ---
+=== Run 1/10 - Mon Aug 18 11:03:21 PM PDT 2025 ===
+Batched forward, batch size is: 50
+
+BATCHED results: 58226 / 60000
+2080345637 ns
+
+----------------------------------------
+
+=== Run 2/10 - Mon Aug 18 11:03:24 PM PDT 2025 ===
+Batched forward, batch size is: 50
+
+BATCHED results: 58255 / 60000
+2070058467 ns
+
+----------------------------------------
+
+=== Run 3/10 - Mon Aug 18 11:03:27 PM PDT 2025 ===
+Batched forward, batch size is: 50
+
+BATCHED results: 58269 / 60000
+2065013837 ns
+
+----------------------------------------
+
+=== Run 4/10 - Mon Aug 18 11:03:31 PM PDT 2025 ===
+Batched forward, batch size is: 50
+
+BATCHED results: 58232 / 60000
+2064712165 ns
+
+----------------------------------------
+
+=== Run 5/10 - Mon Aug 18 11:03:34 PM PDT 2025 ===
+Batched forward, batch size is: 50
+
+BATCHED results: 58287 / 60000
+2062353080 ns
+
+----------------------------------------
+
+=== Run 6/10 - Mon Aug 18 11:03:38 PM PDT 2025 ===
+Batched forward, batch size is: 50
+
+BATCHED results: 58259 / 60000
+2076104384 ns
+
+----------------------------------------
+
+=== Run 7/10 - Mon Aug 18 11:03:41 PM PDT 2025 ===
+Batched forward, batch size is: 50
+
+BATCHED results: 58273 / 60000
+2072011477 ns
+
+----------------------------------------
+
+=== Run 8/10 - Mon Aug 18 11:03:44 PM PDT 2025 ===
+Batched forward, batch size is: 50
+
+BATCHED results: 58246 / 60000
+2067530508 ns
+
+----------------------------------------
+
+=== Run 9/10 - Mon Aug 18 11:03:48 PM PDT 2025 ===
+Batched forward, batch size is: 50
+
+BATCHED results: 58244 / 60000
+2074259502 ns
+
+----------------------------------------
+
+=== Run 10/10 - Mon Aug 18 11:03:51 PM PDT 2025 ===
+Batched forward, batch size is: 50
+
+BATCHED results: 58262 / 60000
+2061196029 ns
+
+----------------------------------------
+
+Benchmark completed: Mon Aug 18 11:03:54 PM PDT 2025
