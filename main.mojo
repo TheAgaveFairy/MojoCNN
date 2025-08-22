@@ -116,6 +116,7 @@ fn training(mut model: LeNet5, data: UnsafePointer[Image], batch_size: Int, tota
 fn testing(model: LeNet5, data: UnsafePointer[Image], total_size: Int) -> Int:
     var correct = 0
     for i in range(total_size):
+        showProgress(i, total_size)
         var pred = predict[device](model, data[i])
         var actual = Int(data[i].label)
         correct += 1 if pred == actual else 0
@@ -151,16 +152,13 @@ fn showProgress(progress: Int, total: Int) -> None:
     print("]", round(ratio * 100, 3), "%", end = "")
 
 def main():
-    #print("hello...", file = stderr)
     var train_data = UnsafePointer[Image].alloc(COUNT_TRAIN)
     var test_data = UnsafePointer[Image].alloc(COUNT_TEST)
-    readData(COUNT_TRAIN, "train", train_data)
-    readData(COUNT_TEST, "test", test_data)
 
-    _ = """
     var batch_sizes = [100]#, 300, 600, 1000]
-    print(len(batch_sizes), "tests to run")
+    print(len(batch_sizes), "batch_size tests to run")
     for b_sz in batch_sizes: #range(tests_to_run):
+        print("\tbatch size:", b_sz)
         seed(0) #random
         readData(COUNT_TRAIN, "train", train_data)
         readData(COUNT_TEST, "test", test_data)
@@ -168,7 +166,6 @@ def main():
 
         var model = LeNet5()
         model.randomizeWeights()
-        var batch_size = 300 # could do a number of different batch sizes if we wanted
 
         var start_time = perf_counter_ns()
         training(model, train_data, b_sz, COUNT_TRAIN)
@@ -176,22 +173,24 @@ def main():
         var elapsed = end_time - start_time
 
         var correct = testing(model, test_data, COUNT_TEST)
-        print("\n\tResults: batch_size:", b_sz, "took", (elapsed // 1_000_000), "ms\n\t\t", correct, "/", COUNT_TEST)
+        #print("\n\tResults: batch_size:", b_sz, "took", (elapsed // 1_000_000), "ms\n\t\t", correct, "/", COUNT_TEST)
+        print("\n\t", correct, "/", COUNT_TEST, "\n\t", (elapsed // 1_000_000), "ms\n\t\t")
         # TODO: SAVE THE MODEL TO A FILE
-    """
+    
     # TESTING A PRETRAINED VERSION FROM OLD FILE
 
-    print("loading a saved model")
-    var model = LeNet5.fromFile[DType.float64]("model_f64.dat")
+    var model_name = "model_f64.dat"
+    print("loading and testing a saved model:", model_name)
+    var model = LeNet5.fromFile[DType.float64](model_name)
     readData(COUNT_TRAIN, "train", train_data)
     readData(COUNT_TEST, "test", test_data)
     start_time = perf_counter_ns()
     var correct = testing(model, train_data, COUNT_TRAIN)
     end_time = perf_counter_ns()
-    print(correct, "/", COUNT_TRAIN)
+    print("\n\t", correct, "/", COUNT_TRAIN, "correct")
     elapsed = end_time - start_time
-    print( elapsed , "ns")
+    print("\t", elapsed , "ns")
 
-    # for the losers out there
+    # OS will get these
     #train_data.free()
     #test_data.free()

@@ -715,6 +715,7 @@ fn softMax[count: Int](input: LayoutTensor[ftype, Layout.row_major(count), Mutab
 fn loadTarget(features: Feature, errors: Feature, label: Int) -> None:
     softMax(features.output, errors.output, label)
 
+
 #define CONVOLUTION_BACKWARD(input,inerror,outerror,weight,wd,bd,actiongrad)
 #CONVOLUTION_BACKWARD(features->layer4, errors->layer4, errors->layer5, lenet->weight4_5, deltas->weight4_5, deltas->bias4_5, actiongrad);
 # actiongrad (return x > 0);
@@ -1005,6 +1006,10 @@ fn forward[device: String](lenet: LeNet5, features: Feature):
 
         matmulForward(features.layer5, features.output, lenet.weight5_6, lenet.bias5_6)
         #LAYER5, LEA_f5, output
+    else:
+        print("DEVICE NOT SUPPORTED, PLEASE use cpu")
+
+    _ = """    
     elif device == "gpu":
         convoluteForwardGPU(lenet.weight0_1, lenet.bias0_1, features.input, features.layer1)
 
@@ -1022,8 +1027,7 @@ fn forward[device: String](lenet: LeNet5, features: Feature):
 
         matmulForward(features.layer5, features.output, lenet.weight5_6, lenet.bias5_6)
         #LAYER5, LEA_f5, output
-    else:
-        print("DEVICE NOT SUPPORTED, PLEASE cpu OR gpu")
+    """
 
 
 fn backward(lenet: LeNet5, deltas: LeNet5, errors: Feature, features: Feature) -> None:
@@ -1051,107 +1055,3 @@ fn predict[device: String](lenet: LeNet5, image: Image) -> Int:
     loadInput(feat, image)
     forward[device](lenet, feat)
     return argMax(feat.output)
-
-# TODO: take action as parameter
-fn convoluteForwardGPU[in_chan: Int,
-                     out_chan: Int,
-                     feat_size: Int,
-                     kernel_size: Int,
-                     ](
-                        kernels: LayoutTensor[mut = True, ftype, Layout.row_major(in_chan, out_chan, kernel_size, kernel_size)],
-                        bias: LayoutTensor[mut = True, ftype, Layout.row_major(out_chan)],
-                        image: LayoutTensor[mut = True, ftype, Layout.row_major(in_chan, feat_size, feat_size)],
-                        result: LayoutTensor[mut = True, ftype, Layout.row_major(out_chan, feat_size - kernel_size + 1, feat_size - kernel_size + 1)]
-                     ) -> None:
-    alias out_feat_size = feat_size - kernel_size + 1
-    
-    @parameter
-    for x in range(kernels.shape[0]()): # number of input channels
-        @parameter
-        for y in range(kernels.shape[1]()): # number of output channels
-            # slicing syntax (gives a 2d for now) = [ Slice(rows wanted), Slice(cols wanted) IndexList[2](dimensions you want) ] (IndexList[2](dim0, dim1) # etc, or can just be a Scalar offset for each dim to use)
-            var kern_slice = rebind[LayoutTensor[mut = True, ftype, Layout.row_major(kernel_size, kernel_size), MutableAnyOrigin]](kernels.slice[Slice(0, kernel_size), Slice(0, kernel_size), IndexList[2](2,3)](IndexList[2](x,y)))
-            
-            var image_slice = rebind[LayoutTensor[mut = True, ftype, Layout.row_major(feat_size, feat_size), MutableAnyOrigin]](image.slice[Slice(0, feat_size), Slice(0, feat_size), IndexList[2](1,2)](x)) # might be wrong final arg
-
-            var result_slice = rebind[LayoutTensor[mut = True, ftype, Layout.row_major(out_feat_size, out_feat_size), MutableAnyOrigin]](result.slice[Slice(0, out_feat_size), Slice(0, out_feat_size), IndexList[2](1,2)](y))
-
-            try:
-                with DeviceContext() as ctx:
-                    var dev_buf_result = ctx.enqueue_create_buffer[ftype](result_slice.size()).enqueue_fill(0)
-                    var dev_buf_image = ctx.enqueue_create_buffer[ftype](image_slice.size()).enqueue_fill(0)
-                    var dev_buf_kern = ctx.enqueue_create_buffer[ftype](kern_slice.size()).enqueue_fill(0)
-
-                    var dev_result = __type_of(result_slice)(dev_buf_result)
-                    var dev_image = __type_of(image_slice)(dev_buf_image)
-                    var dev_kern = __type_of(kern_slice)(dev_buf_kern)
-
-                    dev_buf_image.enqueue_copy_from(image_slice.ptr)
-                    dev_buf_kern.enqueue_copy_from(kern_slice.ptr)
-
-                    #ctx.enqueue_copy[ftype](dev_buf_image, image_slice.ptr)
-                    #ctx.enqueue_copy[ftype](dev_buf_kern, src_buf = kern_slice.ptr)
-
-                    alias GRID_DIM = (1,1)
-                    alias BLOCK_DIM = (out_feat_size, out_feat_size)
-
-                    # VAR or ALIAS
-                    var test_fn = ctx.compile_function[convoluteValidFusedGPU[result_slice.layout, image_slice.layout, kern_slice.layout, reLu]]()
-                    #var test_fn = ctx.compile_function[convoluteValidFusedGPU]()
-
-                    _ = """
-                    ctx.call_function[convoluteValidFusedGPU[result_slice.layout, image_slice.layout, kern_slice.layout, reLu]
-                    ](dev_result, dev_image, dev_kern, rebind[Scalar[ftype]](bias[y]),
-                    grid_dim = GRID_DIM, block_dim = BLOCK_DIM)
-                    """
-                    ctx.enqueue_function(test_fn, dev_result, dev_image, dev_kern, rebind[Scalar[ftype]](bias[y]),
-                    grid_dim = GRID_DIM, block_dim = BLOCK_DIM)
-                    
-                    #result_host_buffer = ctx.create_host_buffer[ftype](result_slice.size())
-                    #ctx.enqueue_copy(result_slice.ptr, dev_buf_result)
-
-                    dev_buf_result.enqueue_copy_to(result_slice.ptr)
-                    ctx.synchronize()
-            except e:
-                print(e)
-
-
-fn convoluteValidFusedGPU[
-        out_layout: Layout, in_layout: Layout, kernel_layout: Layout, action: fn(Scalar[ftype]) -> Scalar[ftype]
-](
-    output: LayoutTensor[mut = True, ftype, out_layout, MutableAnyOrigin],
-    img: LayoutTensor[mut = True, ftype, in_layout, MutableAnyOrigin],
-    kernel: LayoutTensor[mut = True, ftype, kernel_layout, MutableAnyOrigin],
-    bias: Scalar[ftype],
-) -> None:
-    # global indices
-    var gx = block_dim.x * block_idx.x + thread_idx.x # col
-    var gy = block_dim.y * block_idx.y + thread_idx.y # row
-
-    # assuming square inputs
-    alias feat_size = img.shape[0]()
-    alias kernel_size = kernel.shape[0]()
-    alias out_size = feat_size - kernel_size + 1
-
-    var local_kernel = LayoutTensorBuild[ftype]().row_major[kernel_size, kernel_size]().shared().alloc()
-    # TODO: the LayoutTensorBuild will be deprecated soon, I think it'll look something like ...
-    # ... var local_kernel = LayoutTensor[mut = True, ftype, kernel.layout, AddressSpace.SHARED](uninitialized = True)
-
-    if gx < kernel_size and gy < kernel_size:
-        local_kernel[gy, gx] = kernel[gy, gx]
-
-    if gx < out_size and gy < out_size:
-        var result: output.element_type = 0
-
-        # KERNEL_SIZE dims
-        @parameter
-        for i in range(kernel_size):
-            @parameter
-            for j in range(kernel_size):
-                var in_row = gy + i
-                var in_col = gx + j
-
-                result += img[in_row, in_col] * local_kernel[i, j]
-
-        output[gy, gx] = action(rebind[Scalar[ftype]](result) + bias)
-
