@@ -873,8 +873,9 @@ def main():
 
     try:
         with DeviceContext() as ctx:
+            print("Device found:", ctx.name())
             #_ = """
-            alias batch_size = 75 # more than ~75 fails "uses too much parameter space"
+            alias batch_size = 50 # more than ~75 fails "uses too much parameter space"
 
             var conv1 = ctx.compile_function[conv1FusedKernel[batch_size, reLu]]()
             var pool1 = ctx.compile_function[maxPool1Kernel[batch_size]]()
@@ -889,8 +890,8 @@ def main():
             var end_time = perf_counter_ns()
             var elapsed = end_time - start_time
 
-            print("\nBATCHED results:", correct, "/", COUNT_TRAIN)
-            print(elapsed, "ns")
+            print("\t", correct, "/", COUNT_TRAIN, "correct")
+            print("\t", elapsed, "ns")
             #"""
             _ = """
             var single_conv1 = ctx.compile_function[conv1FusedKernel[1, reLu]]()

@@ -11,8 +11,12 @@ def main():
     var num_cuda_devices = DeviceContext.number_of_devices(api="cuda")
     print("Number of CUDA devices:", num_cuda_devices)
     
-    if num_cuda_devices > 0:
-        var ctx = DeviceContext()
+    #if num_cuda_devices > 0:
+    for dev in range(num_cuda_devices):
+        var ctx = DeviceContext(dev)
+
+        var device_name = ctx.name()
+        print("Device name:", device_name)
         
         # Get the maximum number of threads per block
         var max_threads = ctx.get_attribute(DeviceAttribute.MAX_THREADS_PER_BLOCK)
@@ -47,8 +51,9 @@ def main():
         var max_sm_pmp = ctx.get_attribute(DeviceAttribute.MAX_SHARED_MEMORY_PER_MULTIPROCESSOR)
         print("Max shared mem per multiproc:", max_sm_pmp)
 
-    else:
-        print("No CUDA devices found")
+        print()
+    #else: # that shouldnt be allowed
+        #print("No CUDA devices found")
     
     # For comparison, show CPU threads
     print("CPU logical cores:", num_logical_cores())

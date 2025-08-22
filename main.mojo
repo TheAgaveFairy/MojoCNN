@@ -174,7 +174,7 @@ def main():
 
         var correct = testing(model, test_data, COUNT_TEST)
         #print("\n\tResults: batch_size:", b_sz, "took", (elapsed // 1_000_000), "ms\n\t\t", correct, "/", COUNT_TEST)
-        print("\n\t", correct, "/", COUNT_TEST, "\n\t", (elapsed // 1_000_000), "ms\n\t\t")
+        print("\n\t", correct, "/", COUNT_TEST, "correct\n\t", (elapsed // 1_000_000), "ms\n\t\t")
         # TODO: SAVE THE MODEL TO A FILE
     
     # TESTING A PRETRAINED VERSION FROM OLD FILE
