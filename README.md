@@ -1,19 +1,25 @@
 # MojoCNN
 This is an implementation of the classic* LeNet-5 Convolutional Neural Network from scratch in Mojo🔥 for CPU and GPU with its MNIST dataset. GPU is inference only for now with a performance increase of about 6x over the CPU. In comparison to PyTorch, my GPU inference is 4% faster! Batch size for testing was 50. Accuracy is maintained, +/- 0.5%.
 
-*Note that the linear layer of size 84 is missing in this version, for now, so that I could compare against an older C / CUDA version I've done (https://github.com/TheAgaveFairy/LeNet-5). The old C version is only 1/2x the speed of the Mojo GPU version, much better than the Mojo CPU version (I have ideas about why that is - mainly I imagine the all model layers being stored contiguously on the stack is a big help).
+*Note that the linear layer of size 84 is missing in this version, for now, so that I could compare against an older C / CUDA version I've done (https://github.com/TheAgaveFairy/LeNet-5). The old C (CPU) version is only 1/2x the speed of the Mojo GPU version, i.e. much better than the Mojo CPU version (I have ideas about why that is - mainly I imagine the all model layers being stored contiguously on the stack is a big help).
 
 ## Running This
 Pixi is suggested by Modular for their projects and I've loved it. Install pixi, "pixi shell" into the directory, and use the standard "mojo main.mojo" or "mojo lenetgpu.mojo" to run the CPU and GPU version respectively or "mojo build" to get an executable. Mojo 25.5.0.dev2025072405.
 
 ## Files
 deviceinfo.mojo : just spits out some info about your GPU
+
 helpers.mojo : loading MNIST data, CPU training and testing loops, etc
+
 lenet.mojo : CPU implementation of the model struct, feature buffer, and the input Image structs
+
 lenetgpu.mojo : GPU versions of the model and feature buffers and all kernels, plus a main() for testing
 main.mojo : CPU only!
+
 model*.dat : trained versions of the flattened weights from the old C project (again, these lack that penultimate layer of size 84)
+
 *-ubyte : MNIST dataset files for the images and the corresponding labels. note that there's some headers (never fully figured out why)
+
 results03.ods : see the third sheet for a summary. Mojo runs -O3 by default, so C versions were run with this flag as well.
 
 ## Project Notes

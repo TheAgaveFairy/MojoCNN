@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# Claude 4 generated, only minor edits
 # LeNet GPU Benchmark Runner
 # Runs ./lenetgpu multiple times and appends results to resultsO3.txt
 
