@@ -1,8 +1,8 @@
 # MojoCNN
-Working on converting this LeNet5 project to Mojo. Starting with a near 1:1 version just as a starting point, then I'll work on making it better with GPU kernels, SIMD, better data structures, etc.
+Note that the linear layer of size 84 is missing in this version, for now, for comparisons against an older CUDA version I've done where  https://github.com/fan-wenjie/LeNet-5 was the inspiration.
 
-https://github.com/fan-wenjie/LeNet-5 is the inspiration
+The model_f64 is a trained version of the model saved from the C project in double format.
 
-The model_f64 is a trained version of the model saved from the C project in double format. I've also included a mnist csv just in case I want to play with that, but I'm using the binary files from the above project.
+GPU kernels are for inference only, for now. Initial findings show that I'm about 4% faster than a PyTorch implementation, surprisingly. This is with a batch size of about 50 on my RTX 3070 (8GB). Without more profiling tools (soon to come, IIRC), I don't think I'd super know where to look to improve that possibility. I tested up to about 75 successfully.
 
-Some personal notes: I didn't know that I could do some_layout_tensor.ptr[i] to more easily index through an array, it would simplify a lot of areas of code. I might go back later, but for now, there's a lot of dense indexing.
+There certainly are plenty of places for improvement. I think some of the API is unstable as well. Some TODOs and open mysteries and upcoming expected changes (InlineArray run_destructors = True). No tiling is done, they have their own methods to load things from global memory into shared, etc.
