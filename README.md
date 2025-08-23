@@ -85,7 +85,7 @@ mojo build lenetgpu.mojo
 mojo deviceinfo.mojo  # Check GPU capabilities
 ```
 
-## 📊 Performance Comparison
+## Performance Comparison
 
 | Implementation | Platform | Time in ms | Notes |
 |---------------|----------|----------------|--------|
