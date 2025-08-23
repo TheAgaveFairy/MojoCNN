@@ -119,7 +119,7 @@ mojo deviceinfo.mojo  # Check GPU capabilities
 
 This is primarily an educational project, but suggestions and discussions about optimization techniques or Mojo best practices are welcome!
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Built with [Mojo🔥](https://www.modular.com/mojo) by Modular
 - MNIST dataset from Yann LeCun's database
