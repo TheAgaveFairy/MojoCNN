@@ -12,7 +12,7 @@ This project was undertaken as a deep learning exercise to:
 
 ## Performance Highlights
 
-- **6x speedup** GPU vs CPU inference
+- **6x speedup** GPU vs CPU inference (AMD Ryzen 7600X 32GB DDR5, NVidia RTX 3070 8GB)
 - **4% faster** than PyTorch GPU inference (batch size 50)
 - **Maintained accuracy** within ±0.5% of reference implementations
 - **Custom GPU kernels** written entirely in Mojo
@@ -26,7 +26,7 @@ This implementation features a modified LeNet-5 architecture:
 - ReLU activation function
 - MNIST dataset integration
 
-*Note: The traditional 84-unit penultimate layer is omitted for direct comparison with a [previous](https://github.com/TheAgaveFairy/LeNet-5) C/CUDA implementation.*
+*Note: The traditional 84-unit penultimate layer is omitted for direct comparison with a [previous](https://github.com/TheAgaveFairy/LeNet-5) C/CUDA implementation. Additionally, some skipped connections are omitted after the first pooling.*
 
 ## Project Structure
 
@@ -59,7 +59,7 @@ This implementation features a modified LeNet-5 architecture:
 ## Getting Started
 
 ### Prerequisites
-- Mojo 25.5.0.dev2025072405 or later
+- Mojo 25.5.0.dev2025072405
 - Mojo Supported GPU (NVidia, AMD. Apple support soon!)
 - Pixi package manager
 
@@ -92,7 +92,7 @@ mojo deviceinfo.mojo  # Check GPU capabilities
 | MojoCNN | GPU | 2069 | Custom kernels |
 | MojoCNN | CPU | 12381 | Baseline |
 | PyTorch | GPU | 2150 | 4% slower than MojoCNN |
-| PyTorch | CPU | 2485 | 4% slower than MojoCNN |
+| PyTorch | CPU | 2485 | For scaling reference |
 | C/CUDA | CPU | 4241 | Stack-allocated model, no multithreading enabled |
 
 *All benchmarks conducted with -O3 optimization and batch size 50 on 60,000 images. Times are averages of 10 runs.*
@@ -101,13 +101,13 @@ mojo deviceinfo.mojo  # Check GPU capabilities
 
 ### Known Limitations
 - GPU training not implemented (inference only)
-- Missing 84-unit penultimate layer from standard LeNet-5
+- Missing 84-unit penultimate layer from standard LeNet-5 and skip connections
 - Batch size limited to ~75 due to memory constraints
 - Some potential memory leaks in edge cases
 
 ### Planned Improvements
 - [ ] GPU training implementation
-- [ ] Complete LeNet-5 architecture with all layers
+- [ ] Complete LeNet-5 architecture with all features
 - [ ] Memory optimization (stack allocation where possible)
 - [ ] Kernel tiling and streaming optimizations
 - [ ] SIMD vectorization for CPU operations
