@@ -12,7 +12,8 @@ import benchmark
 from lenet import LeNet5, Feature, Image, loadInput, loadTarget, forward, backward, argMax, ftype, predict, ALPHA
 import lenetgpu
 
-#note this technically isn't LeNet5 as some of the final connections are full instead of sparse, see their paper
+# note this technically isn't LeNet5 as some of the final connections are full instead of sparse, see their paper
+# and the penultimate layer of size 84 isnt their either
 
 alias FILE_TRAIN_IMAGE =    "train-images-idx3-ubyte"
 alias FILE_TRAIN_LABEL =    "train-labels-idx1-ubyte"
@@ -23,7 +24,7 @@ alias NUM_WEIGHTS =     51902 # can be calculated but we're just hardcoding for 
 alias COUNT_TRAIN =     60000
 alias COUNT_TEST =      10000
 
-alias device = "cpu" # TODO: ensure best practices for selecting device
+alias device = "cpu" # TODO: deprecate this
 
 fn readData(count: Int, test_set: String, ptr: UnsafePointer[Image]):
     """
@@ -40,13 +41,13 @@ fn readData(count: Int, test_set: String, ptr: UnsafePointer[Image]):
         var data_file = open(data_filename, "r")
         var label_file = open(label_filename, "r")
     
-        _ = data_file.seek(16, os.SEEK_SET)    # is this some header?...
-        _ = label_file.seek(8, os.SEEK_SET)  # ...just copying the other work (was 8, wtf?)
+        _ = data_file.seek(16, os.SEEK_SET)    # there is some header...
+        _ = label_file.seek(8, os.SEEK_SET)  # ... just do this
 
         alias buffer_size = Image.PixelLayout.size() #IMAGE_SIZE * IMAGE_SIZE
         var image_buffer = UnsafePointer[UInt8].alloc(buffer_size)
         
-        for c in range(count): # need to copy over, this is awful. yikes.
+        for c in range(count): # TODO: this could probably be vectorized
             var data_list = data_file.read_bytes(buffer_size)
             
             var temp = label_file.read_bytes(1)
@@ -68,7 +69,7 @@ fn readData(count: Int, test_set: String, ptr: UnsafePointer[Image]):
     except e:
         print("Error with input binary files")
 
-fn trainBatch(mut model: LeNet5, inputs: UnsafePointer[Image], batch_size: Int):
+fn trainBatch(mut model: LeNet5, inputs: UnsafePointer[Image], batch_size: Int) -> UInt:
     # TODO: Probably could be a method of LeNet5. "correct" ultimately unused
     var buffer = LeNet5()
     var correct = 0
@@ -91,11 +92,12 @@ fn trainBatch(mut model: LeNet5, inputs: UnsafePointer[Image], batch_size: Int):
     var k: Scalar[ftype] = Scalar[ftype](ALPHA) / batch_size
     model.accumulateFromOther(buffer, k)
 
-    _ = correct
-    # return correct
+    #_ = correct
+    return correct
 
 fn train(mut model: LeNet5, input: Image, label: Int):
-    # TODO: UNUSED 
+    # TODO: UNUSED
+    pass
     var feat = Feature()
     var errors = Feature()
     var deltas = LeNet5()
@@ -111,7 +113,7 @@ fn training(mut model: LeNet5, data: UnsafePointer[Image], batch_size: Int, tota
     print("Training")
     for i in range(0, total_size, batch_size):
         showProgress(i, total_size)
-        trainBatch(model, data + i, batch_size)
+        _ = trainBatch(model, data + i, batch_size) # could store correct
 
 fn testing(model: LeNet5, data: UnsafePointer[Image], total_size: Int) -> Int:
     var correct = 0
@@ -130,7 +132,7 @@ fn shuffleData(data: UnsafePointer[Image], count: Int, seed: Int = 69):
     if count < 1:
         return
     var rng_state = seed
-    #some Claude 4 shit
+    # Claude 4 gave this rng_state idea
     for i in range(count - 1, 0, -1):
         rng_state = (rng_state * 1664525 + 1013904223) % 2147483647
         var j = Int(rng_state) % (i + 1)
@@ -160,6 +162,7 @@ def main():
     for b_sz in batch_sizes: #range(tests_to_run):
         print("\tbatch size:", b_sz)
         seed(0) #random
+        # we free the images as we load them into the model so we need to reload
         readData(COUNT_TRAIN, "train", train_data)
         readData(COUNT_TEST, "test", test_data)
         shuffleData(train_data, COUNT_TRAIN) # can set the seed to something "better"
@@ -173,7 +176,6 @@ def main():
         var elapsed = end_time - start_time
 
         var correct = testing(model, test_data, COUNT_TEST)
-        #print("\n\tResults: batch_size:", b_sz, "took", (elapsed // 1_000_000), "ms\n\t\t", correct, "/", COUNT_TEST)
         print("\n\t", correct, "/", COUNT_TEST, "correct\n\t", (elapsed // 1_000_000), "ms\n\t\t")
         # TODO: SAVE THE MODEL TO A FILE
     

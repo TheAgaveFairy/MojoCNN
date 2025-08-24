@@ -47,13 +47,10 @@ alias COUNT_TEST = 10_000
 alias div_chans_conv2 = 8 # any lower uses too many resources, out of registers? didn't investigate the CUDA_ERROR
 alias div_chans_conv3= 8 # needs to be a factor of 120
 
-#alias BatchedFeatures = InlineArray[FeatureGPU, batch_size]
-#alias SingleFeature = InlineArray[FeatureGPU, 1]
-
 struct LeNet5GPU():
     """
-    The LeNet5 model. In the actual LeCun et al implementation, there is some
-    notable sparsity in final layers that is not in this version.
+    Same as the CPU version, but instead the storage is DeviceBuffers on the GPU
+    instead of some sort of HostBuffer (UnsafePointer, in our case).
     """
     # WEIGHTS
     alias w0_1_layout = Layout.row_major(INPUT, LAYER1, LENGTH_KERNEL, LENGTH_KERNEL)
@@ -91,9 +88,8 @@ struct LeNet5GPU():
 
     fn __init__(out self) raises:
         """
-        Initialize to all zeros, for training you'll want to randomizeWeights(),
-        or for inference, read in from a file. Only biases really need to be set
-        to zeroes.
+        Initialize to all zeros. For training you'll want to randomizeWeights(),
+        For inference, can also read in from a file.
         """
         try:
             with DeviceContext() as ctx:
@@ -102,7 +98,6 @@ struct LeNet5GPU():
                 self.w45_storage = ctx.enqueue_create_buffer[ftype](Self.w4_5_layout.size()).enqueue_fill(0)
                 self.w56_storage = ctx.enqueue_create_buffer[ftype](Self.w5_6_layout.size()).enqueue_fill(0)
 
-                # BIASES, no more .stack_allocation()
                 self.b01_storage = ctx.enqueue_create_buffer[ftype](Self.b0_1_layout.size()).enqueue_fill(0)
                 self.b23_storage = ctx.enqueue_create_buffer[ftype](Self.b2_3_layout.size()).enqueue_fill(0)
                 self.b45_storage = ctx.enqueue_create_buffer[ftype](Self.b4_5_layout.size()).enqueue_fill(0)
@@ -122,7 +117,6 @@ struct LeNet5GPU():
                 
         except e:
             print("Something went wrong intializing LeNet5GPU", e)
-            #self.weight0_1 = __type_of(self.weight0_1)(UnsafePointer[Scalar[ftype]].alloc(1))
             raise e
         
     fn __init__(out self, cpu_model: LeNet5) raises:
@@ -142,7 +136,7 @@ struct LeNet5GPU():
                 self.w56_storage = ctx.enqueue_create_buffer[ftype](Self.w5_6_layout.size()).enqueue_fill(0)
                 self.w56_storage.enqueue_copy_from(cpu_model.weight5_6.ptr) 
 
-                # BIASES, no more .stack_allocation()
+                # BIASES
                 self.b01_storage = ctx.enqueue_create_buffer[ftype](Self.b0_1_layout.size()).enqueue_fill(0)
                 self.b01_storage.enqueue_copy_from(cpu_model.bias0_1.ptr)
                 
@@ -263,7 +257,9 @@ struct FeatureGPU(Copyable, Movable):
 
                 ctx.synchronize()
         
-        except e: # TODO: this is just garbage below, idk what to do in case of a failure
+        except e:   # TODO: this is just garbage below, idk what to do in case of
+                    # an actual failure but the compiler fairly wants all
+                    # fields initialized
             print(e)
             print(e, file = stderr)
             self.input_storage = other.input_storage
@@ -282,8 +278,7 @@ struct FeatureGPU(Copyable, Movable):
             self.output = __type_of(self.output)(self.output_storage)
 
     fn __moveinit__(out self, owned existing: Self):
-        print("FGPU moveinit") # TODO: this aint right but isnt ever called afaik
-
+        # TODO: not sure this is correct
         self.input_storage = existing.input_storage
         self.layer1_storage = existing.layer1_storage
         self.layer2_storage = existing.layer2_storage
@@ -309,8 +304,8 @@ struct FeatureGPU(Copyable, Movable):
                     for j in range(PADDED_SIZE): # PADDED_SIZE
                         load_me[i * PADDED_SIZE + j] = rebind[Scalar[ftype]](normed[i, j])
 
-            # TODO: not the best place for this probably...
             normed.ptr.free()
+            # TODO: not the best place for this probably, very eager
             image.pixels.ptr.free()
         except e:
             print("loadInput FeatureGPU ERROR", e)
@@ -399,9 +394,6 @@ fn maxPool2Kernel[batch_size: UInt](lenet: LeNet5GPU, feats: InlineArray[Feature
     feats[img_idx].layer4[chan, row, col] = temp
 
 fn maxPool2Forward[batch_size: UInt](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, batch_size], pool2_kernel: DeviceFunction) raises -> None:
-    """
-    Probably will become method of LeNet5GPU.
-    """
     try:
         with DeviceContext() as ctx:
             ctx.enqueue_function(pool2_kernel, lenet, feats, grid_dim = (batch_size), block_dim = (LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4))
@@ -436,7 +428,7 @@ fn maxPool1Kernel[batch_size: UInt](lenet: LeNet5GPU, feats: InlineArray[Feature
         feats[img_idx].layer2[chan, row // 2, col // 2] = temp
     
     _ = """
-    # if using 14 x 14 output threads, for debugging
+    # if using 14 x 14 output threads, i.e. for debugging. be sure to change call
     var tr = row * 2
     var tc = col * 2
     local_image[tr    , tc    ] = feats[img_idx].layer1[chan, tr, tc]
@@ -454,9 +446,6 @@ fn maxPool1Kernel[batch_size: UInt](lenet: LeNet5GPU, feats: InlineArray[Feature
     """
 
 fn maxPool1Forward[batch_size: UInt](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, batch_size], pool1_kernel: DeviceFunction) raises -> None:
-    """
-    Probably will become method of LeNet5GPU.
-    """
     try:
         with DeviceContext() as ctx:
             ctx.enqueue_function(pool1_kernel, lenet, feats, grid_dim = (batch_size, LAYER1), block_dim = (LENGTH_FEATURE1, LENGTH_FEATURE1))
@@ -477,7 +466,6 @@ fn conv3FusedKernel[batch_size: UInt, action: fn(Scalar[ftype]) -> Scalar[ftype]
     alias num_ocs = out_chans // div_chans # = 120 / 8 = 15 which is how many out_chans this block will do
     alias feat_total_size = Float64(LAYER4 * LENGTH_KERNEL * LENGTH_KERNEL)
     alias reduction_size = 1 << Int(ceil(log2(feat_total_size))) # big enough to hold all of one in_chan as a power of two AKA 512 in this case
-    # TODO: did this reduction size in a way that caused a "must be integral type" and got a shit compiler error
 
     var in_chan = thread_idx.x
     var col = thread_idx.y
@@ -519,7 +507,7 @@ fn conv3Forward[batch_size: UInt](lenet: LeNet5GPU, feats: InlineArray[FeatureGP
     Each block handles some amount of output channels (120 // chan_div) for one
     image.
     """
-    #constrained[LAYER5 % div_chans_conv3 == 0, "Please ensure conv3 channel divisions %= 0."]()
+    constrained[LAYER5 % div_chans_conv3 == 0, "Please ensure conv3 channel divisions %= 0."]()
     try:
         with DeviceContext() as ctx:
             ctx.enqueue_function(conv3_kernel, lenet, feats, grid_dim = (batch_size, div_chans_conv3), block_dim = (LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4))
@@ -592,9 +580,8 @@ fn conv2FusedKernel[batch_size: UInt, action: fn(Scalar[ftype]) -> Scalar[ftype]
 
 fn conv2Forward[batch_size: UInt](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, batch_size], conv2_kernel: DeviceFunction) raises -> None:
     """
-    Probably will become method of LeNet5GPU.
     We want to process 16 output channels of 10*10 features, so we'll divide
-    the output channels amongst blocks as well so that fits better.
+    the output channels amongst blocks so that they fit better.
     """
     constrained[LAYER3 % div_chans_conv2 == 0, "Please ensure conv2 channel divisions %= 0."]()
     try:
@@ -608,7 +595,7 @@ fn conv1FusedKernel[batch_size: UInt, action: fn(Scalar[ftype]) -> Scalar[ftype]
     """
     Grid Dim = (batch_size) = ~50
     Block Dim = (LENGTH_FEATURE1, LENGTH_FEATURE1) = 28 x 28
-    Nothing crazy here. INPUT defines the number of input channels, LAYER1
+    Nothing wild here. INPUT defines the number of input channels, LAYER1
     will be the number of output channels. The image comes in as a feature
     buffer of square shape LENGTH_FEATURE0 x LENGTH_FEATURE0, and so on.
     """
@@ -643,7 +630,6 @@ fn conv1FusedKernel[batch_size: UInt, action: fn(Scalar[ftype]) -> Scalar[ftype]
 
     barrier()
     
-    #if row < feat_out and col < feat_out: NOT NEEDED by design
     @parameter
     for oc in range(LAYER1): # LAYER1 is 6
         var result: sftype = 0
@@ -660,13 +646,11 @@ fn conv1FusedKernel[batch_size: UInt, action: fn(Scalar[ftype]) -> Scalar[ftype]
                     result += rebind[sftype](local_image[ic, in_row, in_col]) * rebind[sftype](local_kernels[ic, oc, i, j])
 
         var final = action(rebind[sftype](result + local_biases[oc]))
-        #final = rebind[sftype](local_image[0, row, col])
-        feats[img_idx].layer1[oc, row, col] = final#action(rebind[sftype](result + local_biases[oc])) # fused action/reLu and bias
+        feats[img_idx].layer1[oc, row, col] = final
 
 
 fn conv1Forward[batch_size: UInt](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, batch_size], conv1_kernel: DeviceFunction) raises -> None:
     """
-    Probably will become method of LeNet5GPU.
     Takes in FeatureGPUs so we can access their buffers, and an already compiled kernel to run.
     """
     try:
@@ -677,6 +661,9 @@ fn conv1Forward[batch_size: UInt](lenet: LeNet5GPU, feats: InlineArray[FeatureGP
         print(e)
 
 fn printerGPU[layout: Layout](storage: DeviceBuffer[ftype], label: String = "") raises -> None:
+    """
+    I used this for some debugging, editing as needed for shapes.
+    """
     print("GPU", label, ":")
     try:
         with DeviceContext() as ctx:
@@ -691,8 +678,10 @@ fn printerGPU[layout: Layout](storage: DeviceBuffer[ftype], label: String = "") 
         print(e)
 
 fn compareBuffers[layout: Layout](device_buffer: DeviceBuffer[ftype], host_buffer: UnsafePointer[Scalar[ftype]], label: String = ""):
-    #alias epsilon = 1e-3 # TODO: implement if needed, things should be exact
-    var epsilon: Scalar[ftype] = -1.0
+    """
+    Used for some debugging.
+    """
+    var epsilon: Scalar[ftype] = -1.0 # fp math isn't exact (+ GPU)
     for i in range(layout.size()):
         if abs(host_buffer[i]) > epsilon:
             epsilon = abs(host_buffer[i])
@@ -711,10 +700,10 @@ fn compareBuffers[layout: Layout](device_buffer: DeviceBuffer[ftype], host_buffe
                             print("\t!=,", i, "dev:", round(dev[i], 2), "host:", round(host_buffer[i],2) , ((dev[i] - host_buffer[i]) * 100) / host_buffer[i], "% difference")
     except e:
         print(e)
-    print("\t...", count, "/", layout.size(), "errors between CPU and GPU. Max 5 shown.")
+    print("\t...", count, "/", layout.size(), "errors between CPU and GPU. Max", max_display, "shown.")
 
 fn singleForward(img: Image, model: LeNet5GPU, lenet_cpu: LeNet5, conv1: DeviceFunction, pool1: DeviceFunction, conv2: DeviceFunction, pool2: DeviceFunction, conv3: DeviceFunction, matmul: DeviceFunction) raises -> UInt8:
-    var gpu_guess = 10 # invalid answer # TODO: make this matter, maybe? or optional[].?
+    var gpu_guess = 10 # invalid answer TODO: make it Optional[Int](None)
     var img_copy = img
 
     alias batch_size = 1
@@ -740,34 +729,6 @@ fn singleForward(img: Image, model: LeNet5GPU, lenet_cpu: LeNet5, conv1: DeviceF
             maxPool2Forward[batch_size](model, feats, pool2)
             conv3Forward[batch_size](model, feats, conv3)
             matMulForward[batch_size](model, feats, matmul)
-            
-            _ = """
-            ctx.enqueue_function[conv1FusedKernel[1, reLu]](model, feat, grid_dim = (1), block_dim = (LENGTH_FEATURE1, LENGTH_FEATURE1))
-            ctx.synchronize()
-            #printerGPU[feat.layer1_layout](feat.layer1_storage, "Layer1")
-            #compareBuffers[feat.layer1_layout](feat.layer1_storage, feat_cpu.layer1.ptr, label = "Layer1")
-
-            ctx.enqueue_function[maxPool1Kernel[1]](model, feat, grid_dim = (1, LAYER1), block_dim = (LENGTH_FEATURE1, LENGTH_FEATURE1))
-            ctx.synchronize()
-            #compareBuffers[feat.layer2_layout](feat.layer2_storage, feat_cpu.layer2.ptr, label = "Layer2")
-
-            ctx.enqueue_function[conv2FusedKernel[1, reLu]](model, feat, grid_dim = (1, div_chans_conv2), block_dim = (LAYER3 // div_chans_conv2, LENGTH_FEATURE3, LENGTH_FEATURE3))
-            ctx.synchronize()
-            #compareBuffers[feat.layer3_layout](feat.layer3_storage, feat_cpu.layer3.ptr, label = "Layer3")
-
-            ctx.enqueue_function[maxPool2Kernel[1]](model, feat, grid_dim = (1), block_dim = (LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4))
-            ctx.synchronize()
-            #compareBuffers[feat.layer4_layout](feat.layer4_storage, feat_cpu.layer4.ptr, label = "Layer4")
-
-            ctx.enqueue_function[conv3FusedKernel[1, reLu]](model, feat, grid_dim = (1, div_chans_conv3), block_dim = (LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4))
-            ctx.synchronize()
-            #compareBuffers[feat.layer5_layout](feat.layer5_storage, feat_cpu.layer5.ptr, label = "Layer5")
-
-            alias reduction_size = 1 << Int(ceil(log2(Float64(LAYER5)))) # 128
-            ctx.enqueue_function[matMulFusedKernel[1, reLu]](model, feat, grid_dim = (1), block_dim = reduction_size)
-            ctx.synchronize()
-            #compareBuffers[feat.output_layout](feat.output_storage, feat_cpu.output.ptr, label = "Output")
-            """
 
             var host_output_layer = __type_of(feat_cpu.output).stack_allocation()
             with feats[0].output_storage.map_to_host() as ans:
@@ -788,18 +749,19 @@ fn getResults[batch_size: UInt](features: InlineArray[FeatureGPU, batch_size]) r
             with features[j].output_storage.map_to_host() as result:
                 var idx: UInt = 13 # "bad" value
                 var val: Scalar[ftype] = -1.0
-                for k in range(OUTPUT): #TODO: memcpy
+                for k in range(OUTPUT): #TODO: memcpy or kernel
                     if result[k] > val:
                         idx = k
                         val = result[k]
 
-                var guess = idx#lenet.argMax(wants_tensor) # TODO: this was causing a WEIRD bug
+                var guess = idx
                 output[j] = guess
     except e:
         print(e)
-    return output^
+    return output^ # ^?
 
 fn tempPrinter[batch_size: UInt](feats: InlineArray[FeatureGPU, batch_size]) -> None:
+    # debugging function for GPU
     var img_idx = block_idx.x
     var tid = thread_idx.x
     var output = "Hello from " + String(img_idx) + ": "
@@ -816,28 +778,12 @@ fn batchedForward[count: UInt, batch_size: UInt](data: UnsafePointer[Image], mod
 
     try:
         with DeviceContext() as ctx:
-            #@parameter # TODO: explodes compile time
+            #@parameter # TODO: @parameter *explodes* compile time
             for i in range(0, count, batch_size):
                 #showProgress(i, count)
                 for j in range(batch_size):
                     features[j].loadInput(data[i + j])
 
-                # THESE KERNEL CALLS ARE NOT THE SOURCE OF THE MEMORY LEAK
-                _ = """
-                ctx.enqueue_function(conv1, model, features, grid_dim = (batch_size), block_dim = (LENGTH_FEATURE1, LENGTH_FEATURE1))
-                ctx.synchronize()
-                ctx.enqueue_function(pool1, model, features, grid_dim = (batch_size, LAYER1), block_dim = (LENGTH_FEATURE1, LENGTH_FEATURE1))
-                ctx.synchronize()
-                ctx.enqueue_function(conv2, model, features, grid_dim = (batch_size, div_chans_conv2), block_dim = (LAYER3 // div_chans_conv2, LENGTH_FEATURE3, LENGTH_FEATURE3))
-                ctx.synchronize()
-                ctx.enqueue_function(pool2, model, features, grid_dim = (batch_size), block_dim = (LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4))
-                ctx.synchronize()
-                ctx.enqueue_function(conv3, model, features, grid_dim = (batch_size, div_chans_conv3), block_dim = (LAYER4, LENGTH_FEATURE4, LENGTH_FEATURE4))
-                ctx.synchronize()
-                ctx.enqueue_function(matmul, model, features, grid_dim = (batch_size), block_dim = reduction_size)
-                ctx.synchronize()
-                #compareBuffers[feat.output_layout](feat.output_storage, feat_cpu.output.ptr, label = "Output")
-                """
                 conv1Forward(model, features, conv1)
                 maxPool1Forward(model, features, pool1)
                 conv2Forward(model, features, conv2)
@@ -892,7 +838,8 @@ def main():
 
             print("\t", correct, "/", COUNT_TRAIN, "correct")
             print("\t", elapsed, "ns")
-            #"""
+
+            # if you want to test single images forward
             _ = """
             var single_conv1 = ctx.compile_function[conv1FusedKernel[1, reLu]]()
             var single_pool1 = ctx.compile_function[maxPool1Kernel[1]]()
@@ -916,4 +863,4 @@ def main():
     except e:
         print("ERROR IN MAIN", e)
         raise e
-        # GOD FORBID YOU EVER WRITE "RAISE" WITHOUT THE EXCEPTION NAME FOLLOWING IT, ASDHGASIDHFASODHIVCABNS
+        # don't forget to tell "raise" what to raise, compiler doesn't handle that well
