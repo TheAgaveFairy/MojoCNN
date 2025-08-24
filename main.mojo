@@ -15,11 +15,11 @@ import lenetgpu
 # note this technically isn't LeNet5 as some of the final connections are full instead of sparse, see their paper
 # and the penultimate layer of size 84 isnt their either
 
-alias FILE_TRAIN_IMAGE =    "train-images-idx3-ubyte"
-alias FILE_TRAIN_LABEL =    "train-labels-idx1-ubyte"
-alias FILE_TEST_IMAGE =     "t10k-images-idx3-ubyte"
-alias FILE_TEST_LABEL =     "t10k-labels-idx1-ubyte"
-alias LENET_FILE =          "model.dat"
+alias FILE_TRAIN_IMAGE =    "data/train-images-idx3-ubyte"
+alias FILE_TRAIN_LABEL =    "data/train-labels-idx1-ubyte"
+alias FILE_TEST_IMAGE =     "data/t10k-images-idx3-ubyte"
+alias FILE_TEST_LABEL =     "data/t10k-labels-idx1-ubyte"
+#alias LENET_FILE =          "models/model.dat"
 alias NUM_WEIGHTS =     51902 # can be calculated but we're just hardcoding for some easier checks at load/save
 alias COUNT_TRAIN =     60000
 alias COUNT_TEST =      10000
@@ -181,9 +181,11 @@ def main():
     
     # TESTING A PRETRAINED VERSION FROM OLD FILE
 
-    var model_name = "model_f64.dat"
+    var model_name = "models/model_f64.dat"
+    alias saved_model_dtype = DType.float64
+
     print("loading and testing a saved model:", model_name)
-    var model = LeNet5.fromFile[DType.float64](model_name)
+    var model = LeNet5.fromFile[saved_model_dtype](model_name)
     readData(COUNT_TRAIN, "train", train_data)
     readData(COUNT_TEST, "test", test_data)
     start_time = perf_counter_ns()

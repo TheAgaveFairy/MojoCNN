@@ -805,7 +805,7 @@ fn batchedForward[count: UInt, batch_size: UInt](data: UnsafePointer[Image], mod
     return correct
 
 def main():
-    var modelCPU = LeNet5.fromFile[DType.float64]("model_f64.dat")
+    var modelCPU = LeNet5.fromFile[DType.float64]("models/model_f64.dat")
     var modelGPUfromCPU = LeNet5GPU(modelCPU)
 
     #print("Kernel Length:", LENGTH_KERNEL)

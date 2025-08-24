@@ -11,10 +11,10 @@ import benchmark
 from lenet import Image, LeNet5, Feature, argMax, predict, loadInput, loadTarget, forward, backward
 alias device = "cpu"
 
-alias FILE_TRAIN_IMAGE =    "train-images-idx3-ubyte"
-alias FILE_TRAIN_LABEL =    "train-labels-idx1-ubyte"
-alias FILE_TEST_IMAGE =     "t10k-images-idx3-ubyte"
-alias FILE_TEST_LABEL =     "t10k-labels-idx1-ubyte"
+alias FILE_TRAIN_IMAGE =    "data/train-images-idx3-ubyte"
+alias FILE_TRAIN_LABEL =    "data/train-labels-idx1-ubyte"
+alias FILE_TEST_IMAGE =     "data/t10k-images-idx3-ubyte"
+alias FILE_TEST_LABEL =     "data/t10k-labels-idx1-ubyte"
 
 alias ftype = lenet.ftype
 alias ALPHA = lenet.ALPHA
