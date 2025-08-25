@@ -13,8 +13,10 @@ from gpu.memory import AddressSpace
 from layout.tensor_builder import LayoutTensorBuild
 
 import lenet
-from lenet import LeNet5, Image
+from lenet import LeNet5
 from helpers import readData, showProgress
+from logger import MultiFileLogger
+from image import Image
 
 alias LENGTH_KERNEL = lenet.LENGTH_KERNEL
 alias LENGTH_KERNEL_SQ = lenet.LENGTH_KERNEL_SQ
@@ -803,64 +805,3 @@ fn batchedForward[count: UInt, batch_size: UInt](data: UnsafePointer[Image], mod
         raise e
 
     return correct
-
-def main():
-    var modelCPU = LeNet5.fromFile[DType.float64]("models/model_f64.dat")
-    var modelGPUfromCPU = LeNet5GPU(modelCPU)
-
-    #print("Kernel Length:", LENGTH_KERNEL)
-    #print("Feature 0->5:", LENGTH_FEATURE0, LENGTH_FEATURE1, LENGTH_FEATURE2, LENGTH_FEATURE3, LENGTH_FEATURE4, LENGTH_FEATURE5)
-    #print("Input Channels, Layer1->5, Output:", INPUT, LAYER1, LAYER2, LAYER3, LAYER4, LAYER5, OUTPUT)
-    
-    var train_data = UnsafePointer[Image].alloc(COUNT_TRAIN)
-    var test_data = UnsafePointer[Image].alloc(COUNT_TEST)
-    readData(COUNT_TRAIN, "train", train_data)
-    readData(COUNT_TEST, "test", test_data)
-
-    try:
-        with DeviceContext() as ctx:
-            print("Device found:", ctx.name())
-            #_ = """
-            alias batch_size = 50 # more than ~75 fails "uses too much parameter space"
-
-            var conv1 = ctx.compile_function[conv1FusedKernel[batch_size, reLu]]()
-            var pool1 = ctx.compile_function[maxPool1Kernel[batch_size]]()
-            var conv2 = ctx.compile_function[conv2FusedKernel[batch_size, reLu]]()
-            var pool2 = ctx.compile_function[maxPool2Kernel[batch_size]]()
-            var conv3 = ctx.compile_function[conv3FusedKernel[batch_size, reLu]]()
-            var matmul = ctx.compile_function[matMulFusedKernel[batch_size, reLu]]()
-            
-            var start_time = perf_counter_ns()
-
-            var correct = batchedForward[COUNT_TRAIN, batch_size](train_data, modelGPUfromCPU, conv1, pool1, conv2, pool2, conv3, matmul)
-            var end_time = perf_counter_ns()
-            var elapsed = end_time - start_time
-
-            print("\t", correct, "/", COUNT_TRAIN, "correct")
-            print("\t", elapsed, "ns")
-
-            # if you want to test single images forward
-            _ = """
-            var single_conv1 = ctx.compile_function[conv1FusedKernel[1, reLu]]()
-            var single_pool1 = ctx.compile_function[maxPool1Kernel[1]]()
-            var single_conv2 = ctx.compile_function[conv2FusedKernel[1, reLu]]()
-            var single_pool2 = ctx.compile_function[maxPool2Kernel[1]]()
-            var single_conv3 = ctx.compile_function[conv3FusedKernel[1, reLu]]()
-            var single_matmul = ctx.compile_function[matMulFusedKernel[1, reLu]]()
-            
-            #readData(COUNT_TRAIN, "train", train_data)
-            #readData(COUNT_TEST, "test", test_data)
-
-            correct = 0
-            for i in range(COUNT_TEST):
-                showProgress(i, COUNT_TEST)
-                var gpu_result = singleForward(test_data[i], modelGPUfromCPU, modelCPU, single_conv1, single_pool1, single_conv2, single_pool2, single_conv3, single_matmul)
-                if gpu_result == test_data[i].label:
-                    correct += 1
-                #print(gpu_result, test_data[i].label,"\n\n")
-            print("\nSINGLE results:", correct, "/", COUNT_TEST)
-            """
-    except e:
-        print("ERROR IN MAIN", e)
-        raise e
-        # don't forget to tell "raise" what to raise, compiler doesn't handle that well

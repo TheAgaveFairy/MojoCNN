@@ -26,7 +26,7 @@ This implementation features a modified LeNet-5 architecture:
 - ReLU activation function
 - MNIST dataset integration
 
-*Note: The traditional 84-unit penultimate layer is omitted for direct comparison with a [previous](https://github.com/TheAgaveFairy/LeNet-5) C/CUDA implementation. Additionally, some skipped connections are omitted after the first pooling.*
+*Note: The traditional 84-unit penultimate layer is omitted for direct comparison with a [previous](https://github.com/TheAgaveFairy/LeNet-5) C/CUDA implementation. Additionally, some skipped connections are omitted after the first pooling. Other differences might be found from the original paper, but this version is still a very common implementation.*
 
 ## Project Structure
 
