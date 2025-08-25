@@ -90,11 +90,6 @@ mojo build main.mojo
 mojo build lenetgpu.mojo
 ```
 
-### Device Information
-```bash
-mojo deviceinfo.mojo  # Check GPU capabilities
-```
-
 ## Performance Comparison
 
 | Implementation | Platform | Time in ms | Notes |
