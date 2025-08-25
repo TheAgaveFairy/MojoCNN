@@ -31,14 +31,24 @@ This implementation features a modified LeNet-5 architecture:
 ## Project Structure
 
 ```
-├── main.mojo          # CPU-only training and inference
-├── lenetgpu.mojo      # GPU inference implementation
-├── lenet.mojo         # CPU model definitions and operations
-├── helpers.mojo       # MNIST data loading and training utilities
-├── deviceinfo.mojo    # GPU device information utilities
-├── model*.dat         # Pre-trained model weights
-├── *-ubyte           # MNIST dataset files
-└── results03.ods     # Performance benchmarking results
+├── main.mojo              # CPU training/testing, GPU testing, logging integration
+├── lenet.mojo             # CPU model implementation and operations
+├── lenetgpu.mojo          # GPU model implementation and kernels
+├── image.mojo             # Image struct for MNIST data representation
+├── dataloader.mojo        # MNIST data loading utilities
+├── helpers.mojo           # Progress bar and activation functions
+├── resultlogger.mojo      # Result logging to file functionality
+├── deviceinfo.mojo        # GPU device information utilities
+├── pytorch/               # PyTorch reference implementation
+│   └── pytorch.py         # Implementation
+│   └── *results.txt       # Benchmarking results
+│   └── runner.sh          # For quick benchmarking multiple times
+├── data/
+│   └── *-ubyte           # MNIST dataset files
+├── models/
+│   └── model*.dat        # Pre-trained model weights
+└── results/              # Logging output directory
+    └── *.csv             # Performance benchmarking results
 ```
 
 ## Technical Implementation
