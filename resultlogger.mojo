@@ -32,7 +32,7 @@ struct InferenceResult(LogEntry):
         try:
             self.timestamp = run("date") # subprocess
         except e:
-            print(e)
+            print("InferenceResult timestamp error:", e)
             self.timestamp = "TIMESTAMP FAILED"
 
         self.device = device
@@ -73,8 +73,9 @@ struct TrainingResult(LogEntry):
         try:
             self.timestamp = run("date") # subprocess
         except e:
-            print(e)
+            print("TrainingResult timestamp error:", e)
             self.timestamp = "TIMESTAMP FAILED"
+
         self.device = device
         self.epoch = epoch
         self.elapsed_ns = elapsed_ns
@@ -111,13 +112,16 @@ struct ResultLogger():
         self.output_path = output_path
         self.format_type = format_type
         try:
-            with open(output_path, "r") as f:
-                if f.read(10) == "timestamp,":
-                    self.headers_written = True
-                else:
-                    self.headers_written = False
+            if os.path.exists(output_path):
+                with open(output_path, "r") as f:
+                    if f.read(10) == "timestamp,":
+                        self.headers_written = True
+                    else:
+                        self.headers_written = False
+            else:
+                self.headers_written = False
         except e:
-            print(e)
+            print("ResultLogger init error:", e)
             self.headers_written = False
 
     fn logInferenceResult(mut self, device: String, elapsed_ns: UInt, correct: UInt, test_size: UInt, batch_size: UInt, ftype: DType) raises -> None:
@@ -157,7 +161,7 @@ struct ResultLogger():
         with open(self.output_path, "w") as file:
             file.write(existing + content)
 
-struct MultiFileLogger:
+struct MultiFileLogger():
     var base_path: String
     var format_type: LogFormat
     var inference_logger: ResultLogger

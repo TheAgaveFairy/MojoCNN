@@ -14,7 +14,7 @@ from layout.tensor_builder import LayoutTensorBuild
 
 import lenet
 from lenet import LeNet5
-from helpers import readData, showProgress
+from helpers import showProgress, reLu
 from logger import MultiFileLogger
 from image import Image
 
@@ -312,9 +312,6 @@ struct FeatureGPU(Copyable, Movable):
         except e:
             print("loadInput FeatureGPU ERROR", e)
             #raise e
-
-fn reLu(x: Scalar[ftype]) -> Scalar[ftype]:
-    return x if x > 0 else 0
 
 fn matMulFusedKernel[batch_size: UInt, action: fn(Scalar[ftype]) -> Scalar[ftype]](lenet: LeNet5GPU, feats: InlineArray[FeatureGPU, batch_size]) -> None:
     """

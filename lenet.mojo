@@ -14,7 +14,7 @@ from layout.tensor_builder import LayoutTensorBuild
 
 from image import Image
 from logger import MultiFileLogger
-from helpers import showProgress
+from helpers import showProgress, reLu, reLuGrad
 
 alias LENGTH_KERNEL = 5
 alias LENGTH_KERNEL_SQ = LENGTH_KERNEL * LENGTH_KERNEL
@@ -33,6 +33,8 @@ alias LAYER3 =  16
 alias LAYER4 =  LAYER3
 alias LAYER5 =  120
 alias OUTPUT =  10
+
+alias NUM_WEIGHTS =     51902 # can be calculated but we're just hardcoding for some easier checks at load/save
 
 alias ALPHA = 0.5
 alias PADDING = 2
@@ -563,15 +565,6 @@ struct Feature():
         self.layer4_storage.free()
         self.layer5_storage.free()
         self.output_storage.free()
-@always_inline
-fn reLu(x: Scalar[ftype]) -> Scalar[ftype]:
-    # TODO: pass around as parameter
-    return x if x > 0 else 0
-
-@always_inline
-fn reLuGrad(y: Scalar[ftype]) -> Scalar[ftype]:
-    # TODO: Make this a function that we pass around.
-    return 1 if y > 0 else 0
 
 fn argMax[layout: Layout](output: LayoutTensor[mut = True, ftype, layout, MutableAnyOrigin]) -> Int:
     var largest_value: Scalar[ftype] = FloatLiteral[].negative_infinity

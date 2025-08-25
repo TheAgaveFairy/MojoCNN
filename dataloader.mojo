@@ -2,6 +2,9 @@ from image import Image
 import os
 
 struct MNISTDataRepository:
+    alias COUNT_TRAIN =     60000
+    alias COUNT_TEST =      10000
+
     var data_dir: String
     var train_image_file: String
     var train_label_file: String

@@ -1,0 +1,4 @@
+timestamp,device,elapsed_ns,correct,test_size,batch_size,ftype
+Mon Aug 25 02:54:08 PM PDT 2025,CPU,2051760390,9826,10000,1,Float32
+Mon Aug 25 02:54:20 PM PDT 2025,CPU,12328719530,58605,60000,1,Float64
+Mon Aug 25 02:54:22 PM PDT 2025,NVIDIA GeForce RTX 3070,1863199710,58207,60000,50,Float32

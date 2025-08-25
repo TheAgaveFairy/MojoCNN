@@ -1,36 +1,28 @@
-from layout import Layout, LayoutTensor, print_layout
-from math import sqrt, exp
-from random import random_float64, seed
-from sys.info import sizeof, num_logical_cores
-from sys import stderr, is_big_endian
-from utils.index import IndexList
+from random import seed
+from sys.info import num_logical_cores
+from sys import stderr
 from time import perf_counter_ns
 import os
 import benchmark
-
 from gpu.host import DeviceContext
 
-from lenet import LeNet5, Feature, Image, loadInput, loadTarget, forward, backward, argMax, ftype, predict, ALPHA, trainBatch, training, testing
-import lenetgpu
-from lenetgpu import LeNet5GPU, conv1FusedKernel, conv2FusedKernel, conv3FusedKernel, maxPool1Kernel, maxPool2Kernel, matMulFusedKernel, batchedForward, reLu
-from helpers import showProgress
+from lenet import LeNet5, Image, ftype, training, testing
+from lenetgpu import LeNet5GPU, conv1FusedKernel, conv2FusedKernel, conv3FusedKernel, maxPool1Kernel, maxPool2Kernel, matMulFusedKernel, batchedForward
+
+from helpers import showProgress, reLu
 from dataloader import MNISTDataRepository
+from resultlogger import MultiFileLogger
 
 # note this technically isn't LeNet5 as some of the final connections are full instead of sparse, see their paper
 # the penultimate layer of size 84 isnt included either, see their paper
 
-alias FILE_TRAIN_IMAGE =    "data/train-images-idx3-ubyte"
-alias FILE_TRAIN_LABEL =    "data/train-labels-idx1-ubyte"
-alias FILE_TEST_IMAGE =     "data/t10k-images-idx3-ubyte"
-alias FILE_TEST_LABEL =     "data/t10k-labels-idx1-ubyte"
-#alias LENET_FILE =          "models/model.dat"
-alias NUM_WEIGHTS =     51902 # can be calculated but we're just hardcoding for some easier checks at load/save
-alias COUNT_TRAIN =     60000
-alias COUNT_TEST =      10000
+alias COUNT_TRAIN = MNISTDataRepository.COUNT_TRAIN
+alias COUNT_TEST = MNISTDataRepository.COUNT_TEST
 
 def main():
     print("CPU Testing")#, num_logical_cores())
     var data_repo = MNISTDataRepository()
+    var logger = MultiFileLogger("results/")
     
     var train_data = UnsafePointer[Image].alloc(COUNT_TRAIN)
     var test_data = UnsafePointer[Image].alloc(COUNT_TEST)
@@ -51,13 +43,14 @@ def main():
         var start_time = perf_counter_ns()
         training(model, train_data, b_sz, COUNT_TRAIN)
         var training_time = perf_counter_ns()
-        var elapsed = (training_time - start_time) // 1_000_000 # to ms
-        print("\n\tTraining done in", elapsed, "ms. Now testing...")
+        var elapsed = (training_time - start_time)
+        print("\n\tTraining done in", elapsed // 1_000_000, "ms. Now testing...")
 
         var correct = testing(model, test_data, COUNT_TEST)
         var end_time = perf_counter_ns()
         elapsed = end_time - training_time
-        print("\t", correct, "/", COUNT_TEST, "correct\n\t", (elapsed // 1_000_000), "ms for testing.")
+        logger.logInferenceResult("CPU", elapsed, correct, COUNT_TEST, 1, ftype)
+        print("\t", correct, "/", COUNT_TEST, "correct\n\t", elapsed // 1_000_000, "ms for testing.")
         # TODO: SAVE THE MODEL TO A FILE
     
     # TESTING A PRETRAINED VERSION FROM OLD FILE
@@ -69,14 +62,13 @@ def main():
     var modelCPU = LeNet5.fromFile[saved_model_dtype](model_name)
     data_repo.loadTrainingData(COUNT_TRAIN, train_data)
     data_repo.loadTestingData(COUNT_TEST, test_data)
-    #readData(COUNT_TRAIN, "train", train_data)
-    #readData(COUNT_TEST, "test", test_data)
     start_time = perf_counter_ns()
     var correct = testing(modelCPU, train_data, COUNT_TRAIN)
     end_time = perf_counter_ns()
     print("\t", correct, "/", COUNT_TRAIN, "correct")
-    elapsed = (end_time - start_time) // 1_000_000
-    print("\t", elapsed , "ms")
+    elapsed = (end_time - start_time)# // 1_000_000
+    print("\t", elapsed // 1_000_000, "ms")
+    logger.logInferenceResult("CPU", elapsed, correct, COUNT_TRAIN, 1, saved_model_dtype)
 
     var modelGPUfromCPU = LeNet5GPU(modelCPU)
 
@@ -84,14 +76,13 @@ def main():
     #print("Feature 0->5:", LENGTH_FEATURE0, LENGTH_FEATURE1, LENGTH_FEATURE2, LENGTH_FEATURE3, LENGTH_FEATURE4, LENGTH_FEATURE5)
     #print("Input Channels, Layer1->5, Output:", INPUT, LAYER1, LAYER2, LAYER3, LAYER4, LAYER5, OUTPUT)
     
-    #readData(COUNT_TRAIN, "train", train_data)
-    #readData(COUNT_TEST, "test", test_data)
     data_repo.loadTrainingData(COUNT_TRAIN, train_data)
     data_repo.loadTestingData(COUNT_TEST, test_data)
 
     try:
         with DeviceContext() as ctx:
-            print("\nDevice found:", ctx.name(), ". Compiling kernels and testing...")
+            var device_name = ctx.name()
+            print("\nDevice found:", device_name, ". Compiling kernels and testing...")
             #_ = """
             alias batch_size = 50 # more than ~75 fails "uses too much parameter space"
 
@@ -106,10 +97,11 @@ def main():
 
             var correct = batchedForward[COUNT_TRAIN, batch_size](train_data, modelGPUfromCPU, conv1, pool1, conv2, pool2, conv3, matmul)
             var end_time = perf_counter_ns()
-            var elapsed = (end_time - start_time) // 1_000_000
+            var elapsed = (end_time - start_time)# // 1_000_000
 
             print("\t", correct, "/", COUNT_TRAIN, "correct")
-            print("\t", elapsed, "ms")
+            print("\t", elapsed // 1_000_000, "ms")
+            logger.logInferenceResult(device_name, elapsed, correct, COUNT_TRAIN, batch_size, ftype)
     except e:
         print("ERROR IN MAIN", e)
         raise e
