@@ -103,7 +103,11 @@ struct TrainingResult(LogEntry):
     fn getHeaders(self) -> String:
         return "timestamp,device,epoch,elapsed_ns,correct,test_size,loss,learning_rate,ftype"
 
-struct ResultLogger():
+trait MyLoggerTrait:
+    fn logInferenceResult(mut self, device: String, elapsed_ns: UInt, correct: UInt, test_size: UInt, batch_size: UInt, ftype: DType) raises -> None: ...
+    fn logTrainingEpoch(mut self, device: String, epoch: UInt, elapsed_ns: UInt, correct: UInt, test_size: UInt, loss: Float32, learning_rate: Float32, ftype: DType) raises -> None: ...
+
+struct ResultLogger(MyLoggerTrait):
     var output_path: String
     var format_type: LogFormat
     var headers_written: Bool # TODO: make this better
@@ -161,7 +165,7 @@ struct ResultLogger():
         with open(self.output_path, "w") as file:
             file.write(existing + content)
 
-struct MultiFileLogger():
+struct MultiFileLogger(MyLoggerTrait):
     var base_path: String
     var format_type: LogFormat
     var inference_logger: ResultLogger

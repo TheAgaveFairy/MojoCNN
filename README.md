@@ -98,7 +98,7 @@ mojo build lenetgpu.mojo
 | MojoCNN | CPU | 12381 | Baseline |
 | PyTorch | GPU | 2150 | 4% slower than MojoCNN |
 | PyTorch | CPU | 2485 | For scaling reference |
-| C/CUDA | CPU | 4241 | Stack-allocated model, no multithreading enabled |
+| C/CUDA | CPU | 4241 | Stack-allocated model |
 
 *All benchmarks conducted with -O3 optimization and batch size 50 on 60,000 images. Times are averages of 10 runs.*
 

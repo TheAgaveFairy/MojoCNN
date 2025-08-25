@@ -911,21 +911,8 @@ fn trainBatch(mut model: LeNet5, inputs: UnsafePointer[Image], batch_size: Int) 
 
     return correct
 
-fn train(mut model: LeNet5, input: Image, label: Int):
-    # TODO: UNUSED 
-    var feat = Feature()
-    var errors = Feature()
-    var deltas = LeNet5()
-
-    loadInput(feat, input)
-    forward(model, feat)
-    loadTarget(feat, errors, label)
-    backward(model, deltas, errors, feat)
-    
-    model.accumulateFromOther(deltas, ALPHA)
-
 fn training(mut model: LeNet5, data: UnsafePointer[Image], batch_size: Int, total_size: Int):
-    print("Training")
+    #print("Training")
     for i in range(0, total_size, batch_size):
         showProgress(i, total_size)
         _ = trainBatch(model, data + i, batch_size)
