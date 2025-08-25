@@ -65,7 +65,7 @@ def main():
     alias model_name = "models/model_f64.dat"
     alias saved_model_dtype = DType.float64
 
-    print("\nLoading and testing a saved model: '" + model_name +"'")
+    print("Loading and testing a saved model: '" + model_name +"'")
     var modelCPU = LeNet5.fromFile[saved_model_dtype](model_name)
     data_repo.loadTrainingData(COUNT_TRAIN, train_data)
     data_repo.loadTestingData(COUNT_TEST, test_data)
@@ -91,7 +91,7 @@ def main():
 
     try:
         with DeviceContext() as ctx:
-            print("Device found:", ctx.name(), ". Compiling kernels and testing...")
+            print("\nDevice found:", ctx.name(), ". Compiling kernels and testing...")
             #_ = """
             alias batch_size = 50 # more than ~75 fails "uses too much parameter space"
 
