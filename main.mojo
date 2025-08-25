@@ -10,10 +10,11 @@ import benchmark
 
 from gpu.host import DeviceContext
 
-from lenet import LeNet5, Feature, Image, loadInput, loadTarget, forward, backward, argMax, ftype, predict, ALPHA
+from lenet import LeNet5, Feature, Image, loadInput, loadTarget, forward, backward, argMax, ftype, predict, ALPHA, trainBatch, training, testing
 import lenetgpu
 from lenetgpu import LeNet5GPU, conv1FusedKernel, conv2FusedKernel, conv3FusedKernel, maxPool1Kernel, maxPool2Kernel, matMulFusedKernel, batchedForward, reLu
-from helpers import readData, trainBatch, training, testing, shuffleData, showProgress
+from helpers import showProgress
+from dataloader import MNISTDataRepository
 
 # note this technically isn't LeNet5 as some of the final connections are full instead of sparse, see their paper
 # the penultimate layer of size 84 isnt included either, see their paper
@@ -29,6 +30,8 @@ alias COUNT_TEST =      10000
 
 def main():
     print("CPU Testing")#, num_logical_cores())
+    var data_repo = MNISTDataRepository()
+    
     var train_data = UnsafePointer[Image].alloc(COUNT_TRAIN)
     var test_data = UnsafePointer[Image].alloc(COUNT_TEST)
 
@@ -38,9 +41,9 @@ def main():
         print("\tBatch size:", b_sz)
         seed(0) # for random, we could search for a better seed for our shuffleData
         # we free the images as we load them into the model so we need to reload
-        readData(COUNT_TRAIN, "train", train_data)
-        readData(COUNT_TEST, "test", test_data)
-        shuffleData(train_data, COUNT_TRAIN) # "hope" for a golden ticket
+        data_repo.loadTrainingData(COUNT_TRAIN, train_data)
+        data_repo.loadTestingData(COUNT_TEST, test_data)
+        data_repo.shuffleData(train_data, COUNT_TRAIN) # "hope" for a golden ticket
 
         var model = LeNet5()
         model.randomizeWeights()
@@ -64,8 +67,10 @@ def main():
 
     print("\nLoading and testing a saved model: '" + model_name +"'")
     var modelCPU = LeNet5.fromFile[saved_model_dtype](model_name)
-    readData(COUNT_TRAIN, "train", train_data)
-    readData(COUNT_TEST, "test", test_data)
+    data_repo.loadTrainingData(COUNT_TRAIN, train_data)
+    data_repo.loadTestingData(COUNT_TEST, test_data)
+    #readData(COUNT_TRAIN, "train", train_data)
+    #readData(COUNT_TEST, "test", test_data)
     start_time = perf_counter_ns()
     var correct = testing(modelCPU, train_data, COUNT_TRAIN)
     end_time = perf_counter_ns()
@@ -79,8 +84,10 @@ def main():
     #print("Feature 0->5:", LENGTH_FEATURE0, LENGTH_FEATURE1, LENGTH_FEATURE2, LENGTH_FEATURE3, LENGTH_FEATURE4, LENGTH_FEATURE5)
     #print("Input Channels, Layer1->5, Output:", INPUT, LAYER1, LAYER2, LAYER3, LAYER4, LAYER5, OUTPUT)
     
-    readData(COUNT_TRAIN, "train", train_data)
-    readData(COUNT_TEST, "test", test_data)
+    #readData(COUNT_TRAIN, "train", train_data)
+    #readData(COUNT_TEST, "test", test_data)
+    data_repo.loadTrainingData(COUNT_TRAIN, train_data)
+    data_repo.loadTestingData(COUNT_TEST, test_data)
 
     try:
         with DeviceContext() as ctx:

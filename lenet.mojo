@@ -14,6 +14,7 @@ from layout.tensor_builder import LayoutTensorBuild
 
 from image import Image
 from logger import MultiFileLogger
+from helpers import showProgress
 
 alias LENGTH_KERNEL = 5
 alias LENGTH_KERNEL_SQ = LENGTH_KERNEL * LENGTH_KERNEL
@@ -27,9 +28,9 @@ alias LENGTH_FEATURE5 = (LENGTH_FEATURE4 - LENGTH_KERNEL + 1)
 
 alias INPUT  =  1
 alias LAYER1 =  6
-alias LAYER2 =  6
+alias LAYER2 =  LAYER1
 alias LAYER3 =  16
-alias LAYER4 =  16
+alias LAYER4 =  LAYER3
 alias LAYER5 =  120
 alias OUTPUT =  10
 
@@ -38,7 +39,7 @@ alias PADDING = 2
 
 alias IMAGE_SIZE =      28 # as we read it in from the file, its padded to LENGTH_FEATURE0 (a.k.a. PADDED_SIZE)
 alias PADDED_SIZE = IMAGE_SIZE + 2 * PADDING # 32 x 32 is what we want eventually # this should equal LENGTH_FEATURE0
-alias ftype = DType.float32 # model's float type. pixels are uint8 (bytes), non-negotiable
+alias ftype = DType.float32 # model's internal float type
 
 struct LeNet5(Copyable):
     """
@@ -847,28 +848,24 @@ fn loadInput(features: Feature, image: Image):
     
     normed.ptr.free()
 
-fn forward[device: String](lenet: LeNet5, features: Feature):
-    @parameter
-    if device == "cpu":
-        convoluteForward(lenet.weight0_1, lenet.bias0_1, features.input, features.layer1)
-        # input, l1, lf0, lk
+fn forward(lenet: LeNet5, features: Feature):
+    convoluteForward(lenet.weight0_1, lenet.bias0_1, features.input, features.layer1)
+    # input, l1, lf0, lk
 
-        maxPoolForward(features.layer1, features.layer2)
-        # l1 lf1 lf2
+    maxPoolForward(features.layer1, features.layer2)
+    # l1 lf1 lf2
 
-        convoluteForward(lenet.weight2_3, lenet.bias2_3, features.layer2, features.layer3)
-        #l2 l3 lf2 lk
+    convoluteForward(lenet.weight2_3, lenet.bias2_3, features.layer2, features.layer3)
+    #l2 l3 lf2 lk
 
-        maxPoolForward(features.layer3, features.layer4)
-        # l3 lf3 lf4
+    maxPoolForward(features.layer3, features.layer4)
+    # l3 lf3 lf4
 
-        convoluteForward(lenet.weight4_5, lenet.bias4_5, features.layer4, features.layer5)
-        #l4 l5 lf4 lk
+    convoluteForward(lenet.weight4_5, lenet.bias4_5, features.layer4, features.layer5)
+    #l4 l5 lf4 lk
 
-        matmulForward(features.layer5, features.output, lenet.weight5_6, lenet.bias5_6)
-        #LAYER5, LEA_f5, output
-    else:
-        print("DEVICE NOT SUPPORTED, PLEASE use cpu")
+    matmulForward(features.layer5, features.output, lenet.weight5_6, lenet.bias5_6)
+    #LAYER5, LEA_f5, output
 
 fn backward(lenet: LeNet5, deltas: LeNet5, errors: Feature, features: Feature) -> None:
     matmulBackward(features.layer5, errors.layer5, errors.output, lenet.weight5_6, deltas.weight5_6, deltas.bias5_6)
@@ -889,9 +886,64 @@ fn backward(lenet: LeNet5, deltas: LeNet5, errors: Feature, features: Feature) -
     convoluteBackward(features.input, errors.input, errors.layer1, lenet.weight0_1, deltas.weight0_1, deltas.bias0_1)
     #input l1 lf0 lk
 
-fn predict[device: String](lenet: LeNet5, image: Image) -> Int:
+fn predict(lenet: LeNet5, image: Image) -> Int:
     # TODO: Probably could be a method of LeNet5.
     var feat = Feature()
     loadInput(feat, image)
-    forward[device](lenet, feat)
+    forward(lenet, feat)
     return argMax(feat.output)
+
+fn trainBatch(mut model: LeNet5, inputs: UnsafePointer[Image], batch_size: Int) -> UInt:
+    # TODO: Probably could be a method of LeNet5. "correct" ultimately unused
+    var buffer = LeNet5()
+    var correct = 0
+
+    for i in range(batch_size):
+        var feat = Feature()
+        var errors = Feature()
+        var deltas = LeNet5()
+        loadInput(feat, inputs[i])
+        forward(model, feat)
+        var pred = argMax(feat.output)
+        var the_label = Int(inputs[i].label)
+        if pred == the_label:
+            correct += 1
+
+        loadTarget(feat, errors, the_label)
+        backward(model, deltas, errors, feat)
+        buffer.accumulateFromOther(deltas, 1.0)
+
+    var k: Scalar[ftype] = Scalar[ftype](ALPHA) / batch_size
+    model.accumulateFromOther(buffer, k)
+
+    return correct
+
+fn train(mut model: LeNet5, input: Image, label: Int):
+    # TODO: UNUSED 
+    var feat = Feature()
+    var errors = Feature()
+    var deltas = LeNet5()
+
+    loadInput(feat, input)
+    forward(model, feat)
+    loadTarget(feat, errors, label)
+    backward(model, deltas, errors, feat)
+    
+    model.accumulateFromOther(deltas, ALPHA)
+
+fn training(mut model: LeNet5, data: UnsafePointer[Image], batch_size: Int, total_size: Int):
+    print("Training")
+    for i in range(0, total_size, batch_size):
+        showProgress(i, total_size)
+        _ = trainBatch(model, data + i, batch_size)
+
+fn testing(model: LeNet5, data: UnsafePointer[Image], total_size: Int) -> Int:
+    var correct = 0
+    for i in range(total_size):
+        var pred = predict(model, data[i])
+        var actual = Int(data[i].label)
+        correct += 1 if pred == actual else 0
+
+    return correct
+
+

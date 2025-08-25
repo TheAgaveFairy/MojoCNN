@@ -9,7 +9,6 @@ import os
 import benchmark
 
 from lenet import Image, LeNet5, Feature, argMax, predict, loadInput, loadTarget, forward, backward
-alias device = "cpu"
 
 alias FILE_TRAIN_IMAGE =    "data/train-images-idx3-ubyte"
 alias FILE_TRAIN_LABEL =    "data/train-labels-idx1-ubyte"
@@ -72,7 +71,7 @@ fn trainBatch(mut model: LeNet5, inputs: UnsafePointer[Image], batch_size: Int):
         var errors = Feature()
         var deltas = LeNet5()
         loadInput(feat, inputs[i])
-        forward[device](model, feat)
+        forward(model, feat)
         var pred = argMax(feat.output)
         var the_label = Int(inputs[i].label)
         if pred == the_label:
@@ -95,7 +94,7 @@ fn train(mut model: LeNet5, input: Image, label: Int):
     var deltas = LeNet5()
 
     loadInput(feat, input)
-    forward[device](model, feat)
+    forward(model, feat)
     loadTarget(feat, errors, label)
     backward(model, deltas, errors, feat)
     
@@ -110,7 +109,7 @@ fn training(mut model: LeNet5, data: UnsafePointer[Image], batch_size: Int, tota
 fn testing(model: LeNet5, data: UnsafePointer[Image], total_size: Int) -> Int:
     var correct = 0
     for i in range(total_size):
-        var pred = predict[device](model, data[i])
+        var pred = predict(model, data[i])
         var actual = Int(data[i].label)
         correct += 1 if pred == actual else 0
 
