@@ -1,19 +1,19 @@
-from layout import Layout, LayoutTensor, print_layout
-from math import sqrt, exp
-from random import random_float64, seed
+from layout import Layout, LayoutTensor
+from math import sqrt, exp, log
+from random import random_float64
 from sys.info import sizeof
 from sys import stderr, is_big_endian
 from utils.index import IndexList
-from time import perf_counter_ns
 import os
 from memory import memcpy
+from time import perf_counter_ns
 
 from gpu.host import DeviceContext
 from gpu import thread_idx, block_idx, block_dim, barrier
 from layout.tensor_builder import LayoutTensorBuild
 
 from image import Image
-from logger import MultiFileLogger
+from resultlogger import MultiFileLogger, LeNet5Logger
 from helpers import showProgress, reLu, reLuGrad
 
 alias LENGTH_KERNEL = 5
@@ -576,6 +576,23 @@ fn argMax[layout: Layout](output: LayoutTensor[mut = True, ftype, layout, Mutabl
             pos = i
     return pos
 
+fn crossEntropyLoss[count: Int](preds: LayoutTensor[ftype, Layout.row_major(count), MutableAnyOrigin], label: Int) -> Float32:
+    var max_val: Scalar[ftype] = rebind[Scalar[ftype]](preds[0])
+    @parameter
+    for i in range(1, count):
+        if preds[i] > max_val:
+            max_val = rebind[Scalar[ftype]](preds[i])
+
+    var exp_sum: Scalar[ftype] = 0.0
+    @parameter
+    for i in range(count):
+        var temp = rebind[Scalar[ftype]](preds[i] - max_val)
+        exp_sum += exp(temp)
+
+    var log_prob: Scalar[ftype] = rebind[Scalar[ftype]]((preds[label] - max_val) - log(exp_sum))
+    #var rebound_log_prob = rebind[Scalar[DType.float32]](log_prob)
+    return -1.0 * Float32(log_prob)
+
 fn softMax[count: Int](input: LayoutTensor[ftype, Layout.row_major(count), MutableAnyOrigin], loss: LayoutTensor[ftype, Layout.row_major(count), MutableAnyOrigin], label: Int) -> None:
     var inner: loss.element_type = 0.0
     for i in range(count):
@@ -886,10 +903,11 @@ fn predict(lenet: LeNet5, image: Image) -> Int:
     forward(lenet, feat)
     return argMax(feat.output)
 
-fn trainBatch(mut model: LeNet5, inputs: UnsafePointer[Image], batch_size: Int) -> UInt:
+fn trainBatch(mut model: LeNet5, inputs: UnsafePointer[Image], batch_size: Int) -> Tuple[UInt, Float32]:
     # TODO: Probably could be a method of LeNet5. "correct" ultimately unused
     var buffer = LeNet5()
     var correct = 0
+    var total_loss: Float32 = 0.0
 
     for i in range(batch_size):
         var feat = Feature()
@@ -901,7 +919,9 @@ fn trainBatch(mut model: LeNet5, inputs: UnsafePointer[Image], batch_size: Int) 
         var the_label = Int(inputs[i].label)
         if pred == the_label:
             correct += 1
-
+        
+        var loss = crossEntropyLoss(feat.output, the_label)
+        total_loss += loss
         loadTarget(feat, errors, the_label)
         backward(model, deltas, errors, feat)
         buffer.accumulateFromOther(deltas, 1.0)
@@ -909,7 +929,25 @@ fn trainBatch(mut model: LeNet5, inputs: UnsafePointer[Image], batch_size: Int) 
     var k: Scalar[ftype] = Scalar[ftype](ALPHA) / batch_size
     model.accumulateFromOther(buffer, k)
 
-    return correct
+    var avg_loss = total_loss / batch_size
+
+    return Tuple[UInt, Float32](correct, avg_loss)
+
+fn training[T: LeNet5Logger](mut model: LeNet5, data: UnsafePointer[Image], batch_size: Int, total_size: Int, mut logger: T):
+    #print("Training")
+    for i in range(0, total_size, batch_size):
+        showProgress(i, total_size)
+        var start_time = perf_counter_ns()
+        var results_tuple = trainBatch(model, data + i, batch_size)
+        var correct = results_tuple[0]
+        var avg_loss = results_tuple[1]
+        var end_time = perf_counter_ns()
+        var elapsed = end_time - start_time
+        try:
+            logger.logTrainingEpoch("CPU", i, elapsed, correct, total_size, avg_loss, ALPHA, ftype)
+        except e:
+            print("logging error during CPU training:", e)
+        # LOSS, LR
 
 fn training(mut model: LeNet5, data: UnsafePointer[Image], batch_size: Int, total_size: Int):
     #print("Training")

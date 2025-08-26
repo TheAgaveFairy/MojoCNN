@@ -41,7 +41,7 @@ def main():
         model.randomizeWeights()
 
         var start_time = perf_counter_ns()
-        training(model, train_data, b_sz, COUNT_TRAIN)
+        training(model, train_data, b_sz, COUNT_TRAIN, logger)
         var training_time = perf_counter_ns()
         var elapsed = (training_time - start_time)
         print("\n\tTraining done in", elapsed // 1_000_000, "ms. Now testing...")

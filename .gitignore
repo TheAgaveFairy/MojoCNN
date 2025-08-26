@@ -4,6 +4,7 @@
 *.egg-info
 
 scripts/
+results/*.csv
 *.save
 *.bak
 main
