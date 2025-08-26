@@ -1,10 +1,9 @@
-from layout import Layout, LayoutTensor, print_layout
-from math import sqrt, exp, ceil, log2
-from random import random_float64, seed
+from layout import Layout, LayoutTensor
+from math import sqrt, ceil, log2
 from sys.info import sizeof
-from sys import stderr, is_big_endian, argv
+from sys import stderr, is_big_endian
 from utils.index import IndexList
-from time import perf_counter_ns, sleep
+from time import perf_counter_ns
 import os
 
 from gpu.host import DeviceContext, DeviceFunction, DeviceBuffer
@@ -39,12 +38,8 @@ alias OUTPUT = lenet.OUTPUT
 alias ALPHA = lenet.ALPHA
 alias PADDING = lenet.PADDING
 
-alias IMAGE_SIZE = lenet.IMAGE_SIZE
 alias PADDED_SIZE = lenet.PADDED_SIZE
 alias ftype = lenet.ftype # model's float type, must match "lenet" cpu version because we'll call those constructors
-
-alias COUNT_TRAIN = 60_000
-alias COUNT_TEST = 10_000
 
 alias div_chans_conv2 = 8 # any lower uses too many resources, out of registers? didn't investigate the CUDA_ERROR
 alias div_chans_conv3= 8 # needs to be a factor of 120
