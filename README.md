@@ -65,6 +65,7 @@ This implementation features a modified LeNet-5 architecture:
 - Custom GPU memory management and kernel execution
 - Batch processing support (tested up to batch size 75)
 - Cross-platform compatibility (CPU/GPU)
+- Custom logging for training and testing
 
 ## Getting Started
 
